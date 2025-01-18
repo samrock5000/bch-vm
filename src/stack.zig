@@ -1,13 +1,43 @@
 const std = @import("std");
 const Opcode = @import("opcodes.zig").Opcodes;
-const InstructionFunc = *const fn (pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void;
+const ConsensusBch2025 = @import("consensus2025.zig").ConsensusBch2025.init();
 const readPush = @import("push.zig").readPushData;
+const Allocator = std.mem.Allocator;
 
+const Stack = std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length);
 pub const StackValue = struct {
     bytes: []u8,
 };
+pub const Program = struct {
+    stack: std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length),
+    alt_stack: std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length),
+    instruction_funcs: [*]const Instruction,
+    instruction_bytecode: []u8,
+    instruction_pointer: usize,
+    // control_stack: ConditionalStack,
+    // metrics: Metrics,
+    // context: *ScriptExecContext,
+    pub fn init(
+        instruction_funcs: [*]const Instruction,
+        instruction_bytecode: []u8,
+    ) !Program {
+        return Program{
+            .stack = try std.BoundedArray(StackValue, 10_000).init(0),
+            .alt_stack = try std.BoundedArray(StackValue, 10_000).init(0),
+            // .control_stack = ConditionalStack.init(),
+            .instruction_funcs = instruction_funcs,
+            .instruction_bytecode = instruction_bytecode,
+            .instruction_pointer = 0,
+            // .context = context,
+            // .metrics = Metrics.init(),
+        };
+    }
+};
 
-const Stack = std.BoundedArray(StackValue, 10_000);
+pub const Instruction = struct {
+    opcode: u8,
+};
+const InstructionFunc = *const fn (program: *Program) anyerror!void;
 
 const InstructionFuncs = struct {
     const opcodeToFuncTable = [256]InstructionFunc{
@@ -274,1350 +304,1758 @@ const InstructionFuncs = struct {
     fn indexFromOpcode(opcode: Opcode) usize {
         opcodeToFuncTable[opcode];
     }
-    fn run(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-        // std.debug.print("PC {any}\n", .{@as(Opcode, @enumFromInt(pc))});
-        std.debug.print("PC {any}\n", .{code[pc].opcode});
-        // std.debug.print("FIELD {any}\n", .{@field(Opcode, "op_add") });
-        try @call(.always_tail, InstructionFuncs.lookup(code[pc].opcode), .{ pc, code, stack });
+    fn execute(program: *Program) anyerror!void {
+        // try @call(.always_tail, InstructionFuncs.lookup(@as(Opcode, @enumFromInt(program.instruction_pointer))), .{program});
+        try @call(.always_tail, InstructionFuncs.lookup(@as(
+            Opcode,
+            @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+        )), .{program});
     }
 
     fn lookup(opcode: Opcode) InstructionFunc {
         // return opcodeToFuncTable[@intFromEnum(@as(Opcode, @enumFromInt(0)))];
-        std.debug.print("OPCODE {any}\n", .{@intFromEnum(opcode)});
+        // std.debug.print("OPCODE {any}\n", .{@intFromEnum(opcode)});
 
         return opcodeToFuncTable[@intFromEnum(opcode)];
     }
-    fn op_add(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-        const item_lhs = stack.get(stack.len - 2);
-        const item_rhs = stack.get(stack.len - 1);
-        // const res = item_lhs.bytes + item_rhs;
-        // _ = pc;
-        std.debug.print("OP_ADD {any} {any} {any} {}\n ", .{ item_lhs, item_rhs, code, pc });
-    }
-    // fn push_op(pc: u32, code: [*]const Instruction, stack: *Stack) !void {
-    // const push_val = c
-    // }
 };
 
-pub const Instruction = struct {
-    opcode: Opcode,
-};
-// fn getEnumOrdinal(comptime T: type, value: T) usize {
-//     const fields = @typeInfo(T).Enum.fields;
-//     for (fields, 0..) |field, i| {
-//         if (@intFromEnum(value) == field.value) {
-//             return i;
-//         }
-//     }
-//     unreachable;
-// }
-// const OpcodeToOrdinal = struct {
-//     // Create a lookup table at comptime
-//     const table = block: {
-//         const fields = @typeInfo(Opcode).Enum.fields;
-//         var map: [256]u8 = undefined;
-//         for (fields, 0..) |field, i| {
-//             map[field.value] = @intCast(i);
-//         }
-//         break :block map;
-//     };
-
-//     // Function to get ordinal at runtime
-//     pub fn getOrdinal(opcode: Opcode) u8 {
-//         return table[@intFromEnum(opcode)];
-//     }
-// };
 test {
     var funcs = std.ArrayList(Instruction).init(std.testing.allocator);
     defer funcs.deinit();
-    const x = Instruction{ .opcode = Opcode.op_add };
-    try funcs.append(x);
-    // var stack = try Stack.init(5);
+    // for (0..255) |i| {
+    //     try funcs.append(Instruction{ .opcode = @intCast(i) });
+    // }
+    var code = [_]u8{75} ++ .{255} ** 75;
+    for (code) |ins| {
+        try funcs.append(Instruction{ .opcode = @intCast(ins) });
+    }
+    var pgrm = try Program.init(funcs.items.ptr, &code);
+    try InstructionFuncs.execute(&pgrm);
+    // for (0..code.len) |i| {}
+    // try funcs.append(x);
     // var s = [_]u8{1};
     // try stack.append(StackValue{ .bytes = &s });
     // try stack.append(StackValue{ .bytes = &s });
     // try InstructionFuncs.run(@intFromEnum(x.opcode), funcs.items.ptr, &stack);
-    // try InstructionFuncs.run(0x93, funcs.items.ptr, &stack);
     // _ = InstructionFuncs.lookup(x.opcode);
-    const items = InstructionFuncs.opcodeToFuncTable;
-    for (items, 0..) |i, idx| {
-        std.debug.print("item {} index {} \n", .{ i, idx });
-    }
-}
-pub fn op_0(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_1(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_2(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_3(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_4(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_5(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_6(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_7(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_8(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_9(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_10(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_11(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_12(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_13(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_14(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_15(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_16(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_17(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_18(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_19(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_20(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_21(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_22(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_23(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_24(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_25(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_26(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_27(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_28(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_29(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_30(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_31(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_32(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_33(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_34(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_35(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_36(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_37(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_38(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_39(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_40(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_41(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_42(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_43(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_44(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_45(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_46(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_47(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_48(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_49(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_50(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_51(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_52(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_53(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_54(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_55(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_56(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_57(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_58(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_59(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_60(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_61(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_62(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_63(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_64(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_65(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_66(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_67(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_68(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_69(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_70(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_71(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_72(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_73(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_74(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushbytes_75(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushdata_1(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushdata_2(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pushdata_4(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_1negate(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_reserved(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_1(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_2(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_3(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_4(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_5(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_6(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_7(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_8(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_9(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_10(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_11(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_12(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_13(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_14(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_15(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_16(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_nop(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_ver(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_if(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_notif(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_verif(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_vernotif(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_else(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_endif(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_verify(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_return(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_toaltstack(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_fromaltstack(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_2drop(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_2dup(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_3dup(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_2over(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_2rot(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_2swap(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_ifdup(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_depth(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_drop(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_dup(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_nip(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_over(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_pick(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_roll(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_rot(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_swap(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_tuck(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_cat(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_split(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_num2bin(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_bin2num(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_size(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_invert(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_and(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_or(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_xor(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_equal(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_equalverify(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_reserved1(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_reserved2(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_1add(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_1sub(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_2mul(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_2div(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_negate(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_abs(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_not(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_0notequal(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
+    // const items = InstructionFuncs.opcodeToFuncTable;
+    // for (items, 0..) |i, idx| {
+    //     std.debug.print("item {} index {} \n", .{ i, idx });
+    // }
+}
+pub fn op_0(program: *Program) anyerror!void {
+    try program.stack.append(StackValue{ .bytes = &.{} });
+    // const push_value = try readPush(code[ip..], gpa);
+
+    std.debug.print("OP_0 STACK {any}\n", .{program.stack.slice()});
+    std.debug.print("OP_0 ip {any}\n", .{program.instruction_pointer});
+
+    program.instruction_pointer += 1;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+pub fn op_pushbytes_1(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    // std.debug.print("op_pushbytes_1 {any}\n", .{program.instruction_bytecode});
+    std.debug.print("op_pushbytes_1 STACK {any}\n", .{program.stack.slice()});
+    std.debug.print("op_pushbytes_1 ip {any}\n", .{program.instruction_pointer});
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+pub fn op_pushbytes_2(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
 }
 
-pub fn op_sub(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_mul(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_div(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_mod(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_lshift(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_rshift(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_booland(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_boolor(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_numequal(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_numequalverify(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_numnotequal(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_lessthan(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_greaterthan(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_lessthanorequal(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_greaterthanorequal(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_min(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_max(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_within(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_ripemd160(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_sha1(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_sha256(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_hash160(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_hash256(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    std.debug.print("HASH256\n", .{});
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_codeseparator(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_checksig(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_checksigverify(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_checkmultisig(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_checkmultisigverify(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_nop1(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_checklocktimeverify(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_checksequenceverify(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_nop4(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_nop5(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_nop6(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_nop7(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_nop8(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_nop9(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_nop10(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_checkdatasig(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_checkdatasigverify(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_reversebytes(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown189(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown190(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown191(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_inputindex(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_activebytecode(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_txversion(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_txinputcount(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_txoutputcount(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_txlocktime(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_utxovalue(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_utxobytecode(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_outpointtxhash(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_outpointindex(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_inputbytecode(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_inputsequencenumber(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_outputvalue(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_outputbytecode(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_utxotokencategory(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_utxotokencommitment(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_utxotokenamount(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_outputtokencategory(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_outputtokencommitment(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_outputtokenamount(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown212(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown213(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown214(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown215(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown216(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown217(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown218(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown219(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown220(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown221(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown222(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown223(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown224(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown225(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown226(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown227(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown228(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown229(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown230(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown231(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown232(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown233(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown234(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown235(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown236(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown237(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown238(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown239(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown240(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown241(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown242(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown243(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown244(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown245(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown246(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown247(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown248(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown249(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown250(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown251(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown252(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown253(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown254(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
-}
-pub fn op_unknown255(pc: u32, code: [*]const Instruction, stack: *Stack) anyerror!void {
-    _ = pc;
-    _ = code;
-    _ = stack;
+pub fn op_pushbytes_3(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_4(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_5(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_6(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_7(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_8(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_9(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_10(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_11(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_12(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_13(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_14(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_15(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_16(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_17(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_18(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_19(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_20(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_21(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_22(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_23(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_24(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_25(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_26(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_27(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_28(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_29(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_30(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_31(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_32(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_33(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_34(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_35(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_36(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_37(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_38(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_39(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_40(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_41(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_42(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_43(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_44(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_45(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_46(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_47(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_48(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_49(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_50(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_51(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_52(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_53(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_54(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_55(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_56(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_57(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_58(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_59(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_60(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_61(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_62(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_63(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_64(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_65(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_66(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_67(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_68(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_69(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_70(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_71(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_72(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_73(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_74(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    program.instruction_pointer += 1 + length;
+    try @call(.always_tail, InstructionFuncs.lookup(@as(
+        Opcode,
+        @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    )), .{program});
+}
+
+pub fn op_pushbytes_75(program: *Program) anyerror!void {
+    const length = program.instruction_bytecode[program.instruction_pointer];
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < length + 1) return error.InsufficientData;
+    try program.stack.append(StackValue{ .bytes = data[0..length] });
+
+    // std.debug.print("STACK {any}", .{program.stack.slice()});
+    program.instruction_pointer += 1 + length;
+    // try @call(.always_tail, InstructionFuncs.lookup(@as(
+    //     Opcode,
+    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
+    // )), .{program});
+}
+
+pub fn op_pushdata_1(program: *Program) anyerror!void {
+    const data = program.instruction_bytecode[program.instruction_pointer..];
+    if (data.len < 2) return error.InsufficientData;
+    const length: u16 = data[1];
+    if (length > data.len - 2) return error.InsufficientData;
+
+    try program.stack.append(StackValue{ .bytes = data[2..][0..length] });
+    // _ = program;
+}
+
+pub fn op_pushdata_2(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_pushdata_4(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_1negate(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_reserved(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_1(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_2(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_3(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_4(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_5(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_6(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_7(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_8(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_9(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_10(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_11(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_12(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_13(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_14(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_15(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_16(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_nop(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_ver(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_if(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_notif(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_verif(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_vernotif(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_else(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_endif(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_verify(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_return(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_toaltstack(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_fromaltstack(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_2drop(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_2dup(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_3dup(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_2over(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_2rot(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_2swap(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_ifdup(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_depth(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_drop(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_dup(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_nip(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_over(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_pick(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_roll(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_rot(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_swap(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_tuck(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_cat(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_split(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_num2bin(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_bin2num(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_size(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_invert(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_and(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_or(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_xor(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_equal(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_equalverify(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_reserved1(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_reserved2(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_1add(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_1sub(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_2mul(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_2div(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_negate(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_abs(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_not(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_0notequal(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_add(program: *Program) anyerror!void {
+    std.debug.print("OP_ADD {any}\n ", .{program});
+}
+
+pub fn op_sub(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_mul(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_div(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_mod(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_lshift(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_rshift(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_booland(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_boolor(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_numequal(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_numequalverify(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_numnotequal(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_lessthan(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_greaterthan(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_lessthanorequal(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_greaterthanorequal(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_min(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_max(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_within(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_ripemd160(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_sha1(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_sha256(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_hash160(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_hash256(program: *Program) anyerror!void {
+    _ = program;
+}
+pub fn op_codeseparator(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_checksig(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_checksigverify(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_checkmultisig(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_checkmultisigverify(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_nop1(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_checklocktimeverify(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_checksequenceverify(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_nop4(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_nop5(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_nop6(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_nop7(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_nop8(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_nop9(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_nop10(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_checkdatasig(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_checkdatasigverify(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_reversebytes(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown189(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown190(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown191(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_inputindex(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_activebytecode(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_txversion(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_txinputcount(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_txoutputcount(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_txlocktime(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_utxovalue(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_utxobytecode(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_outpointtxhash(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_outpointindex(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_inputbytecode(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_inputsequencenumber(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_outputvalue(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_outputbytecode(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_utxotokencategory(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_utxotokencommitment(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_utxotokenamount(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_outputtokencategory(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_outputtokencommitment(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_outputtokenamount(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown212(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown213(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown214(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown215(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown216(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown217(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown218(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown219(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown220(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown221(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown222(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown223(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown224(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown225(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown226(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown227(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown228(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown229(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown230(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown231(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown232(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown233(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown234(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown235(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown236(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown237(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown238(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown239(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown240(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown241(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown242(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown243(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown244(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown245(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown246(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown247(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown248(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown249(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown250(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown251(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown252(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown253(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown254(program: *Program) anyerror!void {
+    _ = program;
+}
+
+pub fn op_unknown255(program: *Program) anyerror!void {
+    _ = program;
 }
