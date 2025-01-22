@@ -160,7 +160,7 @@ pub const PushError = error{
 
 pub const PushResult = struct {
     data: []u8,
-    bytes_read: usize,
+    bytes_read: u32,
 };
 
 /// Reads a push operation from the input data and returns the pushed data along with
@@ -239,7 +239,7 @@ pub fn readPushData(data: []const u8, alloc: Allocator) !PushResult {
 
         const result = try alloc.alloc(u8, length);
         @memcpy(result, data[5 .. length + 5]);
-        return PushResult{ .data = result, .bytes_read = length + 5 };
+        return PushResult{ .data = result, .bytes_read = @as(u32, @intCast(length + 5)) };
     }
 
     return PushError.InvalidPushOpcode;

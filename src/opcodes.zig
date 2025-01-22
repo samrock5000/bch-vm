@@ -551,4 +551,14 @@ pub const Opcodes = enum {
     op_unknown253,
     op_unknown254,
     op_unknown255,
+
+    pub fn isConditional(self: *Opcodes) bool {
+        return switch (self.*) {
+            .op_if => true,
+            .op_notif => true,
+            .op_else => true,
+            .op_endif => true,
+            else => false,
+        };
+    }
 };
