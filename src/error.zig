@@ -20,6 +20,7 @@ pub const VerifyError = error{
     invalid_sighash_type,
     non_null_signature_failure,
     maximum_control_stack_depth,
+    empty_stack_on_lockscript_eval,
 };
 pub const StackError = error{
     reserved_opcode,

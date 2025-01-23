@@ -31,6 +31,7 @@ const Metrics = @import("metrics.zig").ScriptExecutionMetrics;
 const May2025 = @import("vm_limits.zig").May2025;
 const VerifyError = @import("error.zig").VerifyError;
 const StackError = @import("error.zig").StackError;
+const isMinimalDataPush = @import("push.zig").isMinimalDataPush;
 
 const Stack = std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length);
 pub const StackValue = struct {
@@ -87,8 +88,6 @@ const Instruction = *const fn (program: *Program) anyerror!void;
 
 pub const VirtualMachine = struct {
     fn execute(program: *Program) anyerror!void {
-        // std.debug.print("STACK TOP {any}\n", .{program.stack.get(program.stack.len - 1)});
-        // std.debug.print("Constrol stack  {any}\n", .{program.control_stack.size});
         try @call(.auto, VirtualMachine.lookup(@as(
             Opcode,
             @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
@@ -99,22 +98,33 @@ pub const VirtualMachine = struct {
         return opcodeToFuncTable[@intFromEnum(op)];
     }
     fn evaluate(program: *Program) anyerror!void {
-        while (program.instruction_pointer < program.instruction_bytecode.len) {
+        while (stateContinue(@intCast(program.instruction_pointer), program)) {
             const ip = program.instruction_pointer;
+            const execution_state = program.control_stack.allTrue();
+            const operation: Opcode = @enumFromInt(program.instruction_bytecode[ip]);
+            if (isPushOp(operation) and execution_state) {
+                const push_res = try readPush(
+                    program.instruction_bytecode[ip..],
+                    program.allocator,
+                );
+                if (!isMinimalDataPush(
+                    program.instruction_bytecode[ip],
+                    push_res.data,
+                )) return StackError.non_minimal;
 
-            if (isPushOp(@enumFromInt(program.instruction_bytecode[ip]))) {
-                const push_res = try readPush(program.instruction_bytecode[ip..], program.allocator);
                 program.instruction_pointer += push_res.bytes_read;
+
                 try program.stack.append(StackValue{ .bytes = push_res.data });
+                std.debug.print("Push Result {any}\n", .{push_res.data});
                 continue;
             }
-
-            try execute(program);
-
+            if (execution_state or operation.isConditional()) {
+                try execute(program);
+                program.instruction_pointer += 1;
+                continue;
+            }
             program.instruction_pointer += 1;
-
-            // std.debug.print("STATE CONTINUE {}\n", .{stateContinue(@intCast(program.instruction_pointer), program)});
-            if (!stateContinue(@intCast(program.instruction_pointer), program)) break;
+            continue;
         }
     }
     fn verify(
@@ -139,8 +149,6 @@ pub const VirtualMachine = struct {
 
         const lock_script = context.utxo[context.input_index].script;
         const unlock_script = context.tx.inputs[context.input_index].script;
-        // std.debug.print("UNLOCK {any}", .{unlock_script});
-        // std.debug.print("LOCK {any}", .{lock_script});
 
         if (unlock_script.len > ConsensusBch2025.maximum_standard_unlocking_bytecode_length) return VerifyError.excessive_standard_unlocking_bytecode_length;
 
@@ -197,48 +205,48 @@ pub const VirtualMachine = struct {
         // std.debug.print("lockscript {any}\n", .{lock_script});
         // std.debug.print("unlockscript {any}\n", .{unlock_script});
 
-        // var program = try Program.init(lock_script, context);
         program.instruction_bytecode = unlock_script;
         program.metrics.setScriptLimits(true, unlock_script.len);
-        _ = try evaluate(program);
-        std.debug.print("STACK POST UNLOCK{any}\n", .{program.stack.slice()});
-        // std.debug.print("STACK POST UNLOCK CONTROL STACK {any}\n", .{program.control_stack});
-        // std.debug.print("PROGRAM STACK LEN {any}\n", .{program.stack.len});
 
-        // std.debug.print("UNLOCKSCRIPT EVAL {any}\n", .{program.stack.get(program.stack.len - 1).bytes});
+        _ = try evaluate(program);
+
         const unlocking_script_eval = readScriptBool(program.stack.get(program.stack.len - 1).bytes);
         var stack_clone = try std.BoundedArray(StackValue, 10_000).init(0);
         try stack_clone.appendSlice(program.stack.slice());
 
-        const p2sh_lock = if (program.stack.len == 0) StackValue{ .bytes = &[_]u8{} } else stack_clone.pop();
+        const p2sh_lock = if (stack_clone.popOrNull()) |p2sh_stack|
+            p2sh_stack
+        else
+            StackValue{ .bytes = &[_]u8{} };
+
         program.instruction_bytecode = lock_script;
         program.instruction_pointer = 0;
 
         _ = try evaluate(program);
-        // std.debug.print("STACK POST LOCK CONTROL STACK {any}\n", .{program.control_stack});
-        std.debug.print("STACK POST LOCK{any}\n", .{program.stack.slice()});
 
+        if (program.stack.len == 0) return VerifyError.empty_stack_on_lockscript_eval;
         // std.debug.print("LOCKSCRIPT EVAL {any}\n", .{stack.get(stack.len - 1).bytes});
         const lockscript_eval = readScriptBool(program.stack.get(program.stack.len - 1).bytes);
+        // std.debug.print("LOCKSCRIPT EVAL {any}\n", .{lockscript_eval});
         const is_p2sh = Script.isP2SH(lock_script);
 
         if (is_p2sh) {
-            _ = program.stack.pop();
-            // std.debug.print("P2SH {any}\n", .{stack_clone.slice()});
+            std.debug.print("P2SH LOCK{any}\n", .{p2sh_lock.bytes});
             try program.stack.appendSlice(stack_clone.slice());
-            // _ = try evaluate(&stack, p2sh_lock.bytes, context, program.metricts, gpa);
+            // std.debug.print("P2SH STACK {any}\n", .{program.stack.slice()});
             program.instruction_bytecode = p2sh_lock.bytes;
             program.instruction_pointer = 0;
+            const thesig = program.stack.pop();
+            std.debug.print("SIG {any}\n", .{thesig});
+
+            // _ = try evaluate(&stack, p2sh_lock.bytes, context, program.metricts, gpa);
             _ = try evaluate(program);
-            // std.debug.print("P2SH EVAL {any}\n", .{program.stack.get(program.stack.len - 1)});
-            // std.debug.print("STACK POST P2SH CONTROL STACK {any}\n", .{program.control_stack});
 
             if (program.stack.len != 1) {
                 return StackError.requires_clean_stack_redeem_bytecode;
             }
 
             const p2sh_eval = readScriptBool(program.stack.pop().bytes);
-            // std.debug.print("STACK POST P2SH {any}\nEVAL {}", .{ program.stack.slice(), p2sh_eval });
             const op_cost_exceeded = program.metrics.isOverOpCostLimit(true);
             const hash_iterations_exceeded = program.metrics.isOverHashItersLimit();
 
@@ -287,15 +295,10 @@ pub const VirtualMachine = struct {
     }
 
     fn stateContinue(pc: u32, program: *Program) bool {
-        if (pc < program.instruction_bytecode.len) {
-            var opcode = @as(Opcode, @enumFromInt(program.instruction_bytecode[pc]));
-            if (!opcode.isConditional() and !program.control_stack.allTrue()) {
-                return false;
-            }
-            return true;
-        } else {
-            return false;
-        }
+        return if (pc < program.instruction_bytecode.len)
+            true
+        else
+            false;
     }
     const opcodeToFuncTable = [256]Instruction{
         &op_0,
@@ -969,11 +972,11 @@ pub fn op_if(program: *Program) anyerror!void {
         const top = program.stack.get(program.stack.len - 1);
 
         b = readScriptBool(top.bytes);
-        _ = program.stack.pop();
     }
+    _ = program.stack.pop();
 
     program.control_stack.push(b);
-    // std.debug.print("control stack {any}\n", .{program.control_stack.allTrue()});
+    // std.debug.print("control stack  {} {any}\n", .{ program.control_stack.allTrue(), program.stack.slice() });
 }
 
 pub fn op_notif(program: *Program) anyerror!void {
@@ -1980,6 +1983,7 @@ pub fn op_numequalverify(program: *Program) anyerror!void {
     //     Opcode,
     //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
     // )), .{ pc + 1, program });
+    // std.debug.print("op_numequalverify {any}\n", .{program.stack.slice()});
 }
 
 pub fn op_numnotequal(program: *Program) anyerror!void {
@@ -2005,11 +2009,6 @@ pub fn op_numnotequal(program: *Program) anyerror!void {
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
     // metrics.tallyOp(quadratic_op_cost);
     // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
-    // if (!stateContinue(pc, program)) return;
-    // try @call(.always_tail, InstructionFuncs.lookup(@as(
-    //     Opcode,
-    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-    // )), .{ pc + 1, program });
 }
 
 pub fn op_lessthan(program: *Program) anyerror!void {
@@ -4056,7 +4055,7 @@ test "vmbtests" {
 
                 break :blk false;
             };
-            const specific_test = "rvx6rs";
+            const specific_test = "j9ml3h";
             const all = identifier;
             _ = &all;
             _ = &specific_test;
