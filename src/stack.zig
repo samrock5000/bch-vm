@@ -94,7 +94,7 @@ pub const VirtualMachine = struct {
         )), .{program});
     }
     fn lookup(op: Opcode) Instruction {
-        std.debug.print("OP {any}\n", .{op});
+        // std.debug.print("OP {any}\n", .{op});
         return opcodeToFuncTable[@intFromEnum(op)];
     }
     fn evaluate(program: *Program) anyerror!void {
@@ -115,7 +115,7 @@ pub const VirtualMachine = struct {
                 program.instruction_pointer += push_res.bytes_read;
 
                 try program.stack.append(StackValue{ .bytes = push_res.data });
-                std.debug.print("Push Result {any}\n", .{push_res.data});
+                // std.debug.print("Push Result {any}\n", .{push_res.data});
                 continue;
             }
             if (execution_state or operation.isConditional()) {
@@ -208,11 +208,16 @@ pub const VirtualMachine = struct {
         program.instruction_bytecode = unlock_script;
         program.metrics.setScriptLimits(true, unlock_script.len);
 
+        var stack_clone = try std.BoundedArray(StackValue, 10_000).init(0);
+
         _ = try evaluate(program);
 
-        const unlocking_script_eval = readScriptBool(program.stack.get(program.stack.len - 1).bytes);
-        var stack_clone = try std.BoundedArray(StackValue, 10_000).init(0);
         try stack_clone.appendSlice(program.stack.slice());
+
+        // const unlocking_script_eval = if (program.stack.popOrNull()) |top_stack_item|
+        //     readScriptBool(top_stack_item.bytes)
+        // else
+        //     false;
 
         const p2sh_lock = if (stack_clone.popOrNull()) |p2sh_stack|
             p2sh_stack
@@ -225,21 +230,20 @@ pub const VirtualMachine = struct {
         _ = try evaluate(program);
 
         if (program.stack.len == 0) return VerifyError.empty_stack_on_lockscript_eval;
-        // std.debug.print("LOCKSCRIPT EVAL {any}\n", .{stack.get(stack.len - 1).bytes});
+        // std.debug.print("LOCKSCRIPT EVAL {any}\n", .{program.stack.slice()});
         const lockscript_eval = readScriptBool(program.stack.get(program.stack.len - 1).bytes);
         // std.debug.print("LOCKSCRIPT EVAL {any}\n", .{lockscript_eval});
         const is_p2sh = Script.isP2SH(lock_script);
 
         if (is_p2sh) {
-            std.debug.print("P2SH LOCK{any}\n", .{p2sh_lock.bytes});
-            try program.stack.appendSlice(stack_clone.slice());
             // std.debug.print("P2SH STACK {any}\n", .{program.stack.slice()});
+            program.stack.clear();
+            // std.debug.print("P2SH STACK {any}\n", .{program.stack.slice()});
+            // std.debug.print("P2SH LOCK{any}\n", .{p2sh_lock.bytes});
+            try program.stack.appendSlice(stack_clone.slice());
             program.instruction_bytecode = p2sh_lock.bytes;
             program.instruction_pointer = 0;
-            const thesig = program.stack.pop();
-            std.debug.print("SIG {any}\n", .{thesig});
 
-            // _ = try evaluate(&stack, p2sh_lock.bytes, context, program.metricts, gpa);
             _ = try evaluate(program);
 
             if (program.stack.len != 1) {
@@ -268,7 +272,8 @@ pub const VirtualMachine = struct {
         }
 
         // const eval_result = readScriptBool(stack.pop().bytes);
-        const eval_result = unlocking_script_eval and lockscript_eval;
+        // const eval_result = unlocking_script_eval and lockscript_eval;
+        const eval_result = lockscript_eval;
         const op_cost_exceeded = program.metrics.isOverOpCostLimit(true);
         const hash_iterations_exceeded = program.metrics.isOverHashItersLimit();
 
@@ -4059,7 +4064,7 @@ test "vmbtests" {
             const all = identifier;
             _ = &all;
             _ = &specific_test;
-            const test_match = std.mem.eql(u8, identifier, specific_test);
+            const test_match = std.mem.eql(u8, identifier, all);
             _ = &test_match;
             // const test_match_file = std.mem.eql(u8, "core.cashtokens.vmb_tests.json", test_file.filename);
             const test_match_file = std.mem.eql(u8, "core.signing-serialization.vmb_tests.json", test_file.filename);
