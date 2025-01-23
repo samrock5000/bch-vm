@@ -218,9 +218,11 @@ pub fn encodeOutpoints(tx: *Transaction, writer: anytype) !usize {
 }
 pub fn encodeUtxos(utxos: []Transaction.Output, writer: anytype) !usize {
     var len: usize = 0;
-    _ = &writer;
+    // _ = &writer;
     for (utxos) |*output| {
         len += try output.encode(writer);
+        // const x = writer.context.getWritten();
+        // std.debug.print("Buffer size: {}\n", .{x.len});
     }
     return len;
 }
@@ -253,7 +255,9 @@ pub const SigningContextCache = struct {
         };
     }
     pub fn compute(self: *SigningContextCache, ctx: *ScriptExec, buf: []u8) !void {
+        // std.debug.print("{}\n", .{Transaction.calculateOutputsSize(ctx.utxo)});
         var fb = std.io.fixedBufferStream(buf);
+        // std.debug.print("Buffer length at compute: {}\n", .{buf.len});
         const w = fb.writer();
         _ = try SigningSer.encodeOutpoints(&ctx.tx, w);
         _ = sha256(fb.getWritten(), buf[0..32], .{});
@@ -274,6 +278,7 @@ pub const SigningContextCache = struct {
         _ = sha256(fb.getWritten(), buf[96..128], .{});
         _ = sha256(buf[96..128], buf[96..128], .{});
         self.hash_utxos = std.mem.readInt(u256, buf[96..128], .big);
+        fb.reset();
     }
 };
 
@@ -335,6 +340,7 @@ pub fn encodeWithPrecompute(
         }
     }
 
+    // std.debug.print("pos {} end {}\n", .{ sigser_writer.fbs.pos, try sigser_writer.fbs.getEndPos() });
     len += try Encoder.writeVarBytes(sigser_writer.fbs.writer(), script_slice);
     try sigser_writer.fbs.writer().writeInt(u64, src_outs.*[idx].satoshis, .little);
     len += 8;
@@ -440,12 +446,14 @@ test "precompute" {
         .input_index = 0,
         .utxo = utxos,
         .tx = tx,
+        .signing_cache = SigningContextCache.init(),
     };
     _ = &ctx;
     var buf: [32 * 4]u8 = .{0} ** 128;
-    var p = SigningContextCache.init();
-    _ = try p.compute(&ctx, &buf);
-    _ = &p;
+    // var p = SigningContextCache.init();
+    // _ = try p.compute(&ctx, &buf);
+    // _ = &p;
+    try ctx.signing_cache.compute(&ctx, &buf);
     const hashflag: i32 = @intCast(@intFromEnum(SigHashType.allOutputs));
     const script = ctx.tx.inputs[ctx.input_index].script;
     const tx_size = tx.getTransactionSize();
@@ -456,7 +464,7 @@ test "precompute" {
 
     var sigser_writer = Encoder.init(serialized_tx_data.items);
     const encode_precompute_start = std.time.nanoTimestamp();
-    _ = try encodeWithPrecompute(&tx, &utxos, hashflag, script, ctx.input_index, &sigser_writer, allocator, &p);
+    _ = try encodeWithPrecompute(&tx, &utxos, hashflag, script, ctx.input_index, &sigser_writer, allocator, &ctx.signing_cache);
     const encode_precompute_end = std.time.nanoTimestamp();
     const precompute_duration = encode_precompute_end - encode_precompute_start;
     std.debug.print("PRE COMP TIME {}\n", .{precompute_duration});

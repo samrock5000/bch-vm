@@ -12,7 +12,10 @@ const readScriptBool = @import("script.zig").readScriptBool;
 const encodeScriptIntMininal = @import("script.zig").encodeScriptIntMininal;
 const scriptIntParseI64 = @import("script.zig").scriptIntParseI64;
 const readScriptIntI64 = @import("script.zig").readScriptIntI64;
+const isStandard = @import("script.zig").isStandard;
+const isPushOnly = @import("push.zig").isPushOnly;
 const Transaction = @import("transaction.zig").Transaction;
+const verifyTransactionTokens = @import("token.zig").verifyTransactionTokens;
 const Ecdsa = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256oSha256;
 const EcdsaDataSig = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256;
 const Schnorr = @import("schnorr.zig").SchnorrBCH;
@@ -24,6 +27,10 @@ const scriptIntParse = @import("script.zig").scriptIntParse;
 const validSigHashType = @import("sigser.zig").validSigHashType;
 const Script = @import("script.zig");
 const SigningContextCache = @import("sigser.zig").SigningContextCache;
+const Metrics = @import("metrics.zig").ScriptExecutionMetrics;
+const May2025 = @import("vm_limits.zig").May2025;
+const VerifyError = @import("error.zig").VerifyError;
+const StackError = @import("error.zig").StackError;
 
 const Stack = std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length);
 pub const StackValue = struct {
@@ -36,10 +43,10 @@ pub const ScriptExecContext = struct {
     signing_cache: SigningContextCache,
     pub fn init() ScriptExecContext {
         return ScriptExecContext{
-            .input_index = 0,
+            .put_index = 0,
             .utxo = &[_]Transaction.Output{},
             .tx = Transaction.init(),
-            .cashe = SigningContextCache.init(),
+            .signing_cache = SigningContextCache.init(),
         };
     }
     pub fn computeSigningCache(self: *ScriptExecContext, buf: []u8) !void {
@@ -55,23 +62,23 @@ pub const Program = struct {
     code_seperator: usize,
     allocator: Allocator,
     control_stack: ConditionalStack,
-    // metrics: Metrics,
+    metrics: Metrics,
     context: *ScriptExecContext,
     pub fn init(
-        instruction_bytecode: []u8,
+        // instruction_bytecode: []u8,
         gpa: Allocator,
         context: *ScriptExecContext,
     ) !Program {
         return Program{
-            .stack = try std.BoundedArray(StackValue, 10_000).init(0),
-            .alt_stack = try std.BoundedArray(StackValue, 10_000).init(0),
+            .stack = try std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length).init(0),
+            .alt_stack = try std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length).init(0),
             .control_stack = ConditionalStack.init(),
-            .instruction_bytecode = instruction_bytecode,
+            .instruction_bytecode = undefined,
             .instruction_pointer = 0,
             .code_seperator = 0,
             .allocator = gpa,
             .context = context,
-            // .metrics = Metrics.init(),
+            .metrics = Metrics.init(),
         };
     }
 };
@@ -80,13 +87,18 @@ const Instruction = *const fn (program: *Program) anyerror!void;
 
 pub const VirtualMachine = struct {
     fn execute(program: *Program) anyerror!void {
-        // std.debug.print("STACK {any}\n", .{program.stack.slice()});
-        try @call(.always_tail, VirtualMachine.lookup(@as(
+        // std.debug.print("STACK TOP {any}\n", .{program.stack.get(program.stack.len - 1)});
+        // std.debug.print("Constrol stack  {any}\n", .{program.control_stack.size});
+        try @call(.auto, VirtualMachine.lookup(@as(
             Opcode,
             @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
         )), .{program});
     }
-    fn run(program: *Program) anyerror!void {
+    fn lookup(op: Opcode) Instruction {
+        std.debug.print("OP {any}\n", .{op});
+        return opcodeToFuncTable[@intFromEnum(op)];
+    }
+    fn evaluate(program: *Program) anyerror!void {
         while (program.instruction_pointer < program.instruction_bytecode.len) {
             const ip = program.instruction_pointer;
 
@@ -101,14 +113,175 @@ pub const VirtualMachine = struct {
 
             program.instruction_pointer += 1;
 
+            // std.debug.print("STATE CONTINUE {}\n", .{stateContinue(@intCast(program.instruction_pointer), program)});
             if (!stateContinue(@intCast(program.instruction_pointer), program)) break;
         }
     }
+    fn verify(
+        program: *Program,
+    ) !bool {
+        const context = program.context;
+        if (context.tx.inputs.len == 0) {
+            return VerifyError.no_inputs;
+        }
+        if (context.tx.outputs.len == 0) {
+            return VerifyError.no_outputs;
+        }
+        if (context.tx.inputs.len != context.utxo.len) {
+            return VerifyError.output_input_mismatch;
+        }
+        var counting_writer = std.io.countingWriter(std.io.null_writer);
+        _ = try context.tx.encode(counting_writer.writer());
 
-    fn lookup(op: Opcode) Instruction {
-        // std.debug.print("OP {any}\n", .{op});
-        return opcodeToFuncTable[@intFromEnum(op)];
+        if (counting_writer.bytes_written > ConsensusBch2025.maximum_transaction_length_bytes) {
+            return VerifyError.max_tx_length_exceeded;
+        }
+
+        const lock_script = context.utxo[context.input_index].script;
+        const unlock_script = context.tx.inputs[context.input_index].script;
+        // std.debug.print("UNLOCK {any}", .{unlock_script});
+        // std.debug.print("LOCK {any}", .{lock_script});
+
+        if (unlock_script.len > ConsensusBch2025.maximum_standard_unlocking_bytecode_length) return VerifyError.excessive_standard_unlocking_bytecode_length;
+
+        const input_value = totalOutputValue(context.utxo);
+        const output_value = totalOutputValue(context.tx.outputs);
+
+        if (input_value > Consensus.MAX_MONEY) {
+            return VerifyError.input_exceeds_max_money;
+        }
+        if (output_value > Consensus.MAX_MONEY) {
+            return VerifyError.output_exceeds_max_money;
+        }
+        if (output_value > input_value) {
+            return VerifyError.output_value_exceeds_inputs_value;
+        }
+        if (context.tx.version < ConsensusBch2025.minimum_consensus_version or
+            context.tx.version > ConsensusBch2025.maximum_consensus_version)
+        {
+            return VerifyError.invalid_version;
+        }
+        const standard = true;
+        if (standard) {
+            if (counting_writer.bytes_written > ConsensusBch2025.maximum_standard_transaction_size) {
+                return VerifyError.max_tx_standard_length_exceeded;
+            }
+            for (context.utxo) |ouput| {
+                if (!isStandard(ouput.script, program.allocator)) {
+                    return VerifyError.nonstandard_utxo_locking_bytecode;
+                }
+            }
+            for (context.tx.outputs) |ouput| {
+                if (!isStandard(ouput.script, program.allocator)) {
+                    return VerifyError.nonstandard_ouput_locking_bytecode;
+                }
+            }
+            if (!isPushOnly(unlock_script, program.allocator)) return StackError.requires_push_only;
+            // for (context.tx.outputs) |ouput| {
+            //     if (!isStandard(ouput.script, gpa)) {
+            //         return VerifyError.nonstandard;
+            //     }
+            // }
+            //TODO arbritary outputs
+            //TODO handle dust
+            const tokens_verified = try verifyTransactionTokens(context.tx, context.utxo, program.allocator);
+            _ = &tokens_verified;
+            // std.debug.print("TX TOKENS VERIFIED {}\n", .{tokens_Verified});
+            for (context.tx.inputs) |input| {
+                if (input.script.len > ConsensusBch2025.maximum_standard_unlocking_bytecode_length) {
+                    return VerifyError.excessive_standard_unlocking_bytecode_length;
+                }
+            }
+        }
+
+        // std.debug.print("lockscript {any}\n", .{lock_script});
+        // std.debug.print("unlockscript {any}\n", .{unlock_script});
+
+        // var program = try Program.init(lock_script, context);
+        program.instruction_bytecode = unlock_script;
+        program.metrics.setScriptLimits(true, unlock_script.len);
+        _ = try evaluate(program);
+        std.debug.print("STACK POST UNLOCK{any}\n", .{program.stack.slice()});
+        // std.debug.print("STACK POST UNLOCK CONTROL STACK {any}\n", .{program.control_stack});
+        // std.debug.print("PROGRAM STACK LEN {any}\n", .{program.stack.len});
+
+        // std.debug.print("UNLOCKSCRIPT EVAL {any}\n", .{program.stack.get(program.stack.len - 1).bytes});
+        const unlocking_script_eval = readScriptBool(program.stack.get(program.stack.len - 1).bytes);
+        var stack_clone = try std.BoundedArray(StackValue, 10_000).init(0);
+        try stack_clone.appendSlice(program.stack.slice());
+
+        const p2sh_lock = if (program.stack.len == 0) StackValue{ .bytes = &[_]u8{} } else stack_clone.pop();
+        program.instruction_bytecode = lock_script;
+        program.instruction_pointer = 0;
+
+        _ = try evaluate(program);
+        // std.debug.print("STACK POST LOCK CONTROL STACK {any}\n", .{program.control_stack});
+        std.debug.print("STACK POST LOCK{any}\n", .{program.stack.slice()});
+
+        // std.debug.print("LOCKSCRIPT EVAL {any}\n", .{stack.get(stack.len - 1).bytes});
+        const lockscript_eval = readScriptBool(program.stack.get(program.stack.len - 1).bytes);
+        const is_p2sh = Script.isP2SH(lock_script);
+
+        if (is_p2sh) {
+            _ = program.stack.pop();
+            // std.debug.print("P2SH {any}\n", .{stack_clone.slice()});
+            try program.stack.appendSlice(stack_clone.slice());
+            // _ = try evaluate(&stack, p2sh_lock.bytes, context, program.metricts, gpa);
+            program.instruction_bytecode = p2sh_lock.bytes;
+            program.instruction_pointer = 0;
+            _ = try evaluate(program);
+            // std.debug.print("P2SH EVAL {any}\n", .{program.stack.get(program.stack.len - 1)});
+            // std.debug.print("STACK POST P2SH CONTROL STACK {any}\n", .{program.control_stack});
+
+            if (program.stack.len != 1) {
+                return StackError.requires_clean_stack_redeem_bytecode;
+            }
+
+            const p2sh_eval = readScriptBool(program.stack.pop().bytes);
+            // std.debug.print("STACK POST P2SH {any}\nEVAL {}", .{ program.stack.slice(), p2sh_eval });
+            const op_cost_exceeded = program.metrics.isOverOpCostLimit(true);
+            const hash_iterations_exceeded = program.metrics.isOverHashItersLimit();
+
+            if (op_cost_exceeded) {
+                return VerifyError.operation_cost_exceeded;
+            }
+            if (hash_iterations_exceeded) {
+                return VerifyError.hashing_limit_exceeded;
+            }
+            if (!p2sh_eval) {
+                return VerifyError.non_truthy_stack_top_item;
+            }
+            if (!program.control_stack.empty()) {
+                return VerifyError.non_empty_control_stack;
+            }
+            // std.debug.print("OP COST EXCEEDED P2SH {any}\n", .{metrics});
+            // const result = !op_cost_exceeded and !hash_iterations_exceeded and eval_result;
+            return p2sh_eval and lockscript_eval;
+        }
+
+        // const eval_result = readScriptBool(stack.pop().bytes);
+        const eval_result = unlocking_script_eval and lockscript_eval;
+        const op_cost_exceeded = program.metrics.isOverOpCostLimit(true);
+        const hash_iterations_exceeded = program.metrics.isOverHashItersLimit();
+
+        if (op_cost_exceeded) {
+            return VerifyError.operation_cost_exceeded;
+        }
+        if (hash_iterations_exceeded) {
+            return VerifyError.hashing_limit_exceeded;
+        }
+        if (!eval_result) {
+            // std.debug.print("P2PKH BOOL {any}\n", .{eval_result});
+            return VerifyError.non_truthy_stack_top_item;
+        }
+        if (!program.control_stack.empty()) {
+            return VerifyError.non_empty_control_stack;
+        }
+        // std.debug.print("OP COST EXCEEDED P2SH {any}\n", .{metrics});
+        // const result = !op_cost_exceeded and !hash_iterations_exceeded and eval_result;
+        return eval_result;
     }
+
     fn isPushOp(op: Opcode) bool {
         return @intFromEnum(op) <= @intFromEnum(Opcode.op_16);
     }
@@ -800,6 +973,7 @@ pub fn op_if(program: *Program) anyerror!void {
     }
 
     program.control_stack.push(b);
+    // std.debug.print("control stack {any}\n", .{program.control_stack.allTrue()});
 }
 
 pub fn op_notif(program: *Program) anyerror!void {
@@ -2171,7 +2345,7 @@ pub fn op_checksig(program: *Program) anyerror!void {
         program.context,
         sig.bytes,
         publickey.bytes,
-        program.instruction_bytecode[0..][0..],
+        program.instruction_bytecode[0..],
         &bytes_hashed,
         program.allocator,
     );
@@ -2325,6 +2499,7 @@ pub fn op_checkmultisig(program: *Program) anyerror!void {
                 &tmp_bytes_hashed,
                 program.allocator,
             );
+
             if (!success) {
                 return error.non_null_signature_failure;
             }
@@ -2364,7 +2539,7 @@ pub fn op_checkmultisig(program: *Program) anyerror!void {
                 program.context,
                 sig.bytes,
                 pubkey.bytes,
-                program.instruction_bytecode[0..][0..],
+                program.instruction_bytecode[0..],
                 &tmp_bytes_hashed,
                 program.allocator,
             );
@@ -2573,7 +2748,7 @@ pub fn op_checkmultisigverify(program: *Program) anyerror!void {
 }
 
 pub fn op_nop1(program: *Program) anyerror!void {
-    _ = program;
+    _ = &program;
 
     // if (!stateContinue(pc, program)) return;
     // try @call(.always_tail, InstructionFuncs.lookup(@as(
@@ -2624,7 +2799,7 @@ pub fn op_checksequenceverify(program: *Program) anyerror!void {
 }
 
 pub fn op_nop4(program: *Program) anyerror!void {
-    _ = program;
+    _ = &program;
     // if (!stateContinue(pc, program)) return;
     // try @call(.always_tail, InstructionFuncs.lookup(@as(
     //     Opcode,
@@ -2633,7 +2808,7 @@ pub fn op_nop4(program: *Program) anyerror!void {
 }
 
 pub fn op_nop5(program: *Program) anyerror!void {
-    _ = program;
+    _ = &program;
     // if (!stateContinue(pc, program)) return;
     // try @call(.always_tail, InstructionFuncs.lookup(@as(
     //     Opcode,
@@ -2642,7 +2817,7 @@ pub fn op_nop5(program: *Program) anyerror!void {
 }
 
 pub fn op_nop6(program: *Program) anyerror!void {
-    _ = program;
+    _ = &program;
     // if (!stateContinue(pc, program)) return;
     // try @call(.always_tail, InstructionFuncs.lookup(@as(
     //     Opcode,
@@ -2651,7 +2826,7 @@ pub fn op_nop6(program: *Program) anyerror!void {
 }
 
 pub fn op_nop7(program: *Program) anyerror!void {
-    _ = program;
+    _ = &program;
     // if (!stateContinue(pc, program)) return;
     // try @call(.always_tail, InstructionFuncs.lookup(@as(
     //     Opcode,
@@ -2660,7 +2835,7 @@ pub fn op_nop7(program: *Program) anyerror!void {
 }
 
 pub fn op_nop8(program: *Program) anyerror!void {
-    _ = program;
+    _ = &program;
     // if (!stateContinue(pc, program)) return;
     // try @call(.always_tail, InstructionFuncs.lookup(@as(
     //     Opcode,
@@ -2669,7 +2844,7 @@ pub fn op_nop8(program: *Program) anyerror!void {
 }
 
 pub fn op_nop9(program: *Program) anyerror!void {
-    _ = program;
+    _ = &program;
     // if (!stateContinue(pc, program)) return;
     // try @call(.always_tail, InstructionFuncs.lookup(@as(
     //     Opcode,
@@ -2678,7 +2853,7 @@ pub fn op_nop9(program: *Program) anyerror!void {
 }
 
 pub fn op_nop10(program: *Program) anyerror!void {
-    _ = program;
+    _ = &program;
     // if (!stateContinue(pc, program)) return;
     // try @call(.always_tail, InstructionFuncs.lookup(@as(
     //     Opcode,
@@ -3685,9 +3860,12 @@ pub fn checkSig(
 ) !bool {
     const tx_size = Transaction.getTransactionSize(context.tx);
     const utxo_size = Transaction.calculateOutputsSize(context.utxo);
-    var serialized_tx_data = try std.ArrayList(u8).initCapacity(alloc, tx_size + utxo_size);
+    // var serialized_tx_data = try std.ArrayList(u8).initCapacity(alloc, tx_size + utxo_size);
+    const overhead = 1024;
+    var serialized_tx_data = std.ArrayList(u8).init(alloc);
     defer serialized_tx_data.deinit();
-    try serialized_tx_data.resize(tx_size + utxo_size + 128);
+
+    try serialized_tx_data.resize(tx_size + utxo_size + overhead);
 
     // std.debug.print("TX SIZE {} UTXO SIZE {}\n", .{ tx_size, utxo_size });
 
@@ -3796,7 +3974,10 @@ test "simple" {
 }
 test "vmbtests" {
     var genp_alloc = std.heap.GeneralPurposeAllocator(.{}){};
-    // defer _ = genp_alloc.deinit();
+    // defer {
+    //     const check = genp_alloc.detectLeaks();
+    //     std.debug.print("LEAKED {any}", .{check});
+    // }
     const ally = genp_alloc.allocator();
 
     const path = "bch_2025_standard";
@@ -3875,7 +4056,7 @@ test "vmbtests" {
 
                 break :blk false;
             };
-            const specific_test = "qqhjq4";
+            const specific_test = "rvx6rs";
             const all = identifier;
             _ = &all;
             _ = &specific_test;
@@ -3921,82 +4102,88 @@ test "vmbtests" {
                     failed_verifications += 1;
                     continue;
                 };
-                const sig_cache = SigningContextCache.init();
+                std.debug.print("ID {s}\n", .{identifier});
+                // const sig_cache = SigningContextCache.init();
                 var script_exec = ScriptExecContext{
                     .input_index = @intCast(input_index),
                     .utxo = utxos,
                     .tx = tx_decoded,
-                    .signing_cache = sig_cache,
+                    .signing_cache = SigningContextCache.init(),
                 };
-                var sigser_buff: [128]u8 = .{0} ** 128;
-                try script_exec.signing_cache.compute(
-                    &script_exec,
-                    &sigser_buff,
-                );
+                var sigser_buff = [_]u8{0} ** (ConsensusBch2025.maximum_standard_transaction_size * 2);
+                try script_exec.computeSigningCache(&sigser_buff);
+
+                // const p = script_exec.signing_cache;
+                // std.debug.print("HashSeq:{x}\nHashInputs:{x}\nHashoutputs:{x}\nHashUtxos:{x}\n", .{
+                //     p.hash_sequence,
+                //     p.hash_prevouts,
+                //     p.hash_outputs,
+                //     p.hash_utxos,
+                // });
                 // _ = try script_exec.computeSigningCache(&sigser_buff);
 
-                const unlock_code = script_exec.tx.inputs[script_exec.input_index].script;
-                const lock_code = script_exec.utxo[script_exec.input_index].script;
-
-                var program = try Program.init(unlock_code, ally, &script_exec);
-
                 // std.debug.print("unlock_code {any}\n", .{unlock_code});
-                verify_start = std.time.microTimestamp();
                 // std.debug.print("Testing {s}\n", .{test_file.filename});
-                // std.debug.print("ID {s}\n", .{identifier});
+                // const unlock_code = script_exec.tx.inputs[script_exec.input_index].script;
+                // const lock_code = script_exec.utxo[script_exec.input_index].script;
 
-                // std.debug.print("ID {s}\n", .{identifier});
-                _ = VirtualMachine.run(&program) catch |err| {
-                    std.debug.print("ID unlock phase {s} {any}\n", .{ identifier, err });
-                    // std.debug.print("Failed verification  {any}\n", .{err});
-                    _ = &err;
-                    // res = try VM.verify(&script_exec, &metrics, ally.allocator());
+                var program = try Program.init(ally, &script_exec);
 
-                    verification_count += 1;
-                    failed_verifications += 1;
-                    continue;
-                };
+                _ = try VirtualMachine.verify(&program);
 
-                program.instruction_bytecode = lock_code;
-                program.instruction_pointer = 0;
+                verify_start = std.time.microTimestamp();
+
+                // _ = VirtualMachine.evaluate(&program) catch |err| {
+                //     std.debug.print("ID unlock phase {s} {any}\n", .{ identifier, err });
+                //     // std.debug.print("Failed verification  {any}\n", .{err});
+                //     _ = &err;
+                //     // res = try VM.verify(&script_exec, &metrics, ally.allocator());
+
+                //     verification_count += 1;
+                //     failed_verifications += 1;
+                //     continue;
+                // };
+
+                // program.instruction_bytecode = lock_code;
+                // program.instruction_pointer = 0;
+                // std.debug.print("PROGRAM EXEC {any}", .{program.context.signing_cache});
                 // std.debug.print("CODE LEN {any}\n", .{lock_code.len});
 
                 // std.debug.print("STACK UNLOCKING POST {any}\n", .{program.stack.slice()[0]});
                 // std.debug.print("STACK LOCKING CODE {any}\n", .{program.instruction_bytecode});
 
-                var stack_clone = try std.BoundedArray(StackValue, 10_000).init(0);
-                try stack_clone.appendSlice(program.stack.slice());
-                const p2sh_code = if (program.stack.len == 0) StackValue{ .bytes = &[_]u8{} } else stack_clone.pop();
+                // var stack_clone = try std.BoundedArray(StackValue, 10_000).init(0);
+                // try stack_clone.appendSlice(program.stack.slice());
+                // const p2sh_code = if (program.stack.len == 0) StackValue{ .bytes = &[_]u8{} } else stack_clone.pop();
 
-                _ = VirtualMachine.run(&program) catch |err| {
-                    std.debug.print("ID lock phase {s} {any}\n", .{ identifier, err });
-                    // std.debug.print("Failed verification  {any}\n", .{err});
-                    _ = &err;
-                    // res = try VM.verify(&script_exec, &metrics, ally.allocator());
+                // _ = VirtualMachine.evaluate(&program) catch |err| {
+                //     std.debug.print("ID lock phase {s} {any}\n", .{ identifier, err });
+                // std.debug.print("Failed verification  {any}\n", .{err});
+                // _ = &err;
+                // res = try VM.verify(&script_exec, &metrics, ally.allocator());
 
-                    verification_count += 1;
-                    failed_verifications += 1;
-                    continue;
-                };
+                //     verification_count += 1;
+                //     failed_verifications += 1;
+                //     continue;
+                // };
                 // std.debug.print("STACK LOCK POST {any}\n", .{program.stack.slice()});
-                const is_p2sh = Script.getP2SHType(lock_code) != Script.P2SHType.not_p2sh;
+                // const is_p2sh = Script.isP2SH(lock_code);
                 // program.stack
-                if (is_p2sh) {
-                    program.stack.clear();
-                    try program.stack.appendSlice(stack_clone.slice());
-                    program.instruction_bytecode = p2sh_code.bytes;
-                    program.instruction_pointer = 0;
-                    _ = VirtualMachine.run(&program) catch |err| {
-                        std.debug.print("ID p2sh phase {s} {any}\n", .{ identifier, err });
-                        // std.debug.print("Failed verification  {any}\n", .{err});
-                        _ = &err;
-                        // res = try VM.verify(&script_exec, &metrics, ally.allocator());
+                // if (is_p2sh) {
+                //     program.stack.clear();
+                //     try program.stack.appendSlice(stack_clone.slice());
+                //     program.instruction_bytecode = p2sh_code.bytes;
+                //     program.instruction_pointer = 0;
+                //     _ = VirtualMachine.evaluate(&program) catch |err| {
+                //         std.debug.print("ID p2sh phase {s} {any}\n", .{ identifier, err });
+                //         // std.debug.print("Failed verification  {any}\n", .{err});
+                //         _ = &err;
 
-                        verification_count += 1;
-                        failed_verifications += 1;
-                        continue;
-                    };
-                }
+                //         verification_count += 1;
+                //         failed_verifications += 1;
+                //         continue;
+                //     };
+                // }
 
                 verify_end = std.time.microTimestamp();
                 // std.debug.print("STACK P2SH {any} CODE {any}\n", .{ program_p2sh.stack.slice(), lock_code.bytes });

@@ -77,16 +77,27 @@ pub const Output = struct {
     }
     pub fn encode(self: Output, writer: anytype) !usize {
         var len: usize = 0;
-
+        // std.debug.print("Buffer length at encode: {}\n", .{writer.context.buffer.len});
         // Write satoshis
         try writer.writeInt(u64, self.satoshis, .little);
         len += @sizeOf(u64);
 
         if (self.token) |token| {
-            // First, calculate the total script length
-            var counting_writer = std.io.countingWriter(std.io.null_writer);
-            _ = try token.encodeTokenScript(counting_writer.writer());
-            const token_script_len = counting_writer.bytes_written;
+            // // First, calculate the total script length
+            // var counting_writer = std.io.countingWriter(std.io.null_writer);
+            // _ = try token.encodeTokenScript(counting_writer.writer());
+            // const token_script_len = counting_writer.bytes_written;
+            // const total_script_len = token_script_len + self.script.len;
+
+            // // Write the total script length as varint
+            // len += try Encoder.writeVarint(writer, total_script_len);
+
+            // // Now write the actual data
+            // len += try token.encodeTokenScript(writer);
+            // len += try writer.write(self.script);
+            //----------------------
+            // Get length directly from encode function
+            const token_script_len = try token.encodeTokenScript(std.io.null_writer);
             const total_script_len = token_script_len + self.script.len;
 
             // Write the total script length as varint
@@ -94,15 +105,21 @@ pub const Output = struct {
 
             // Now write the actual data
             len += try token.encodeTokenScript(writer);
-            len += self.script.len;
-            try writer.writeAll(self.script);
+            len += try writer.write(self.script);
         } else {
             // Write script length as varint
             len += try Encoder.writeVarint(writer, self.script.len);
 
             // Write the script
-            len += self.script.len;
-            try writer.writeAll(self.script);
+            // self.script.len;
+            // std.debug.print("Script length: {}, Current pos: {}, Available space: {}\n", .{
+            //     self.script.len,
+            //     try writer.context.getPos(),
+            //     try writer.context.getEndPos() - try writer.context.getPos(),
+            // });
+            len += try writer.write(self.script);
+            // std.debug.print("POS {any}\n", .{try writer.context.getPos()});
+            // std.debug.print("POS END {any}\n", .{try writer.context.getEndPos()});
         }
 
         return len;

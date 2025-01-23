@@ -244,7 +244,6 @@ pub fn readPushData(data: []const u8, alloc: Allocator) !PushResult {
 
     return PushError.InvalidPushOpcode;
 }
-
 test "readPushData" {
     const testing = std.testing;
     const alloc = testing.allocator;
@@ -355,3 +354,8 @@ test "checkminimal" {
     try std.testing.expect(isMinimalDataPush(0x4c, &[_]u8{ 0x01, 0x02 }) == false);
     try std.testing.expect(isMinimalDataPush(0x4c, &[_]u8{0} ** 255) == true);
 }
+// test "pushonly" {
+//     var bytecode = [_]u8{};
+//     const res = isPushOnly(&bytecode);
+//     std.debug.print("RES {}", .{res});
+// }

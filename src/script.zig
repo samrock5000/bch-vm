@@ -1,4 +1,5 @@
 const std = @import("std");
+const isPushOnly = @import("push.zig").isPushOnly;
 const BigInt = std.math.big.int.Managed;
 // Constants for script operations
 const OP_DUP: u8 = 0x76;
@@ -12,13 +13,13 @@ const OP_EQUALVERIFY: u8 = 0x88;
 const MAXIMUM_STANDARD_N = 20;
 
 pub const P2SHType = enum {
-    not_p2sh,
+    // not_p2sh,
     p2sh_160,
     p2sh_256,
 };
 
 /// Checks if a script matches either P2SH pattern and returns the type
-pub fn getP2SHType(script: []const u8) P2SHType {
+pub fn isP2SH(script: []const u8) bool {
     // Check for legacy P2SH (160-bit)
     // Pattern: OP_HASH160 20 [20 byte hash] OP_EQUAL
     if (script.len == 23 and
@@ -26,7 +27,7 @@ pub fn getP2SHType(script: []const u8) P2SHType {
         script[1] == 0x14 and
         script[22] == OP_EQUAL)
     {
-        return .p2sh_160;
+        return true;
     }
 
     // Check for P2SH_32 (256-bit)
@@ -36,10 +37,10 @@ pub fn getP2SHType(script: []const u8) P2SHType {
         script[1] == 0x20 and
         script[34] == OP_EQUAL)
     {
-        return .p2sh_256;
+        return true;
     }
 
-    return .not_p2sh;
+    return false;
 }
 pub fn readScriptInt(data: []u8, gpa: std.mem.Allocator) !BigInt {
     // std.debug.print("READ SCRIPT INT {any}\n",.{data.len} );
@@ -210,4 +211,101 @@ pub fn readScriptIntI64(data: []const u8) !i64 {
         }
     }
     return scriptIntParseI64(data);
+}
+pub fn isStandardMultisig(locking_bytecode: []u8) bool {
+    // Use optional unwrapping to handle potential null return
+    // std.debug.print("isStandardMultisigPROPS {any}\n", .{isSimpleMultisigProperties(locking_bytecode)});
+    const multisigProperties = isSimpleMultisigProperties(locking_bytecode) catch return false;
+
+    const m = multisigProperties.m;
+    const n = multisigProperties.n;
+    // std.debug.print("M {} N {}\n", .{ m, n });
+
+    // Validate m and n are within acceptable ranges
+    if (n < 1 or n > MAXIMUM_STANDARD_N or m < 1 or m > n) {
+        return false;
+    }
+
+    return true;
+}
+pub const MultisigProperties = struct {
+    m: u8, // Number of required signatures (first index)
+    n: u8, // Total number of public keys (second to last index)
+};
+
+pub fn isSimpleMultisigProperties(script: []u8) !MultisigProperties {
+    // Basic validation for minimum length and ending with OP_CHECKMULTISIG
+    if (script.len < 3 or script[script.len - 1] != OP_CHECKMULTISIG) {
+        return error.InvalidMultiSigProperties;
+    }
+    const m = pushOpcodeToNum(script[0]);
+    const n = pushOpcodeToNum(script[script.len - 2]);
+    // Extract m from the first index and n from the second to last index
+    return MultisigProperties{ .m = @intCast(m), .n = @intCast(n) };
+}
+pub fn pushOpcodeToNum(opcode: u8) i32 {
+    if (opcode == 0) return 0;
+    if (opcode == 0x4f) return -1;
+    if (std.math.isNan(opcode) or opcode < 0x51 or opcode > 0x60) return @intCast(opcode);
+    return opcode - 0x50;
+}
+/// Checks if a script is a standard address type (P2PKH, P2PK, P2SH, P2MS)
+pub fn isStandard(script: []u8, gpa: std.mem.Allocator) bool {
+    // P2PKH (Pay to Public Key Hash)
+    // Pattern: OP_DUP OP_HASH160 20 [20 byte pubkey hash] OP_EQUALVERIFY OP_CHECKSIG
+    if (script.len == 25 and
+        script[0] == OP_DUP and
+        script[1] == OP_HASH160 and
+        script[2] == 0x14 and
+        script[23] == OP_EQUALVERIFY and
+        script[24] == OP_CHECKSIG)
+    {
+        return true;
+    }
+
+    // P2PK (Pay to Public Key)
+    // Pattern: [compressed/uncompressed pubkey] OP_CHECKSIG
+    if ((script.len == 35 or script.len == 67) and
+        script[script.len - 1] == OP_CHECKSIG)
+    {
+        return true;
+    }
+
+    // P2SH (Pay to Script Hash)
+    // Legacy P2SH (160-bit)
+    // Pattern: OP_HASH160 20 [20 byte hash] OP_EQUAL
+    if (script.len == 23 and
+        script[0] == OP_HASH160 and
+        script[1] == 0x14 and
+        script[22] == OP_EQUAL)
+    {
+        return true;
+    }
+    // P2SH (Pay to Script Hash)
+    // Legacy P2SH (256-bit)
+    // Pattern: OP_HASH256 32 [32 byte hash] OP_EQUAL
+    if (script.len == 35 and
+        script[0] == OP_HASH256 and
+        script[1] == 0x20 and
+        script[34] == OP_EQUAL)
+    {
+        return true;
+    }
+
+    // P2MS (Pay to Multisig)
+    // Pattern varies, but typically starts with a number (m) of required signatures
+    // Then lists public keys
+    // Ends with total number of keys (n) OP_CHECKMULTISIG
+    // std.debug.print("isStandardMultisig {}\n", .{isStandardMultisig(script)});
+    if (isStandardMultisig(script)) return true;
+    // OP_RETURN (Arbitrary Data Output)
+    // Must start with OP_RETURN and be push-only after that
+    if (script.len >= 1 and
+        script[0] == OP_RETURN and
+        isPushOnly(script[1..], gpa))
+    {
+        return true;
+    }
+
+    return false;
 }
