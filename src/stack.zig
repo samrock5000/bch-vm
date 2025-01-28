@@ -44,7 +44,7 @@ pub const ScriptExecContext = struct {
     signing_cache: SigningContextCache,
     pub fn init() ScriptExecContext {
         return ScriptExecContext{
-            .put_index = 0,
+            .input_index = 0,
             .utxo = &[_]Transaction.Output{},
             .tx = Transaction.init(),
             .signing_cache = SigningContextCache.init(),
@@ -66,7 +66,6 @@ pub const Program = struct {
     metrics: Metrics,
     context: *ScriptExecContext,
     pub fn init(
-        // instruction_bytecode: []u8,
         gpa: Allocator,
         context: *ScriptExecContext,
     ) !Program {
@@ -87,21 +86,48 @@ pub const Program = struct {
 const Instruction = *const fn (program: *Program) anyerror!void;
 
 pub const VirtualMachine = struct {
-    fn execute(program: *Program) anyerror!void {
-        try @call(.auto, VirtualMachine.lookup(@as(
-            Opcode,
-            @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-        )), .{program});
+    pub fn execute(program: *Program) anyerror!void {
+        // const ip = program.instruction_pointer;
+        const operation = getOperation(program);
+        try @call(.auto, VirtualMachine.resolveOpcode(operation), .{program});
     }
-    fn lookup(op: Opcode) Instruction {
+    fn resolveOpcode(op: Opcode) Instruction {
         // std.debug.print("OP {any}\n", .{op});
         return opcodeToFuncTable[@intFromEnum(op)];
     }
+    fn getCodepoint(program: *Program) u8 {
+        return program.instruction_bytecode[program.instruction_pointer];
+    }
+    fn getOperation(program: *Program) Opcode {
+        const operation: Opcode = @enumFromInt(getCodepoint(program));
+        return operation;
+    }
+    pub fn nextInstruction(p: *Program) void {
+        p.instruction_pointer += 1;
+    }
+    fn afterOperation(program: *Program) !void {
+        //TODO
+        _ = &program;
+    }
+    fn pushOperation(program: *Program) !void {
+        const ip = program.instruction_pointer;
+        const push_res = try readPush(
+            program.instruction_bytecode[ip..],
+            program.allocator,
+        );
+        if (!isMinimalDataPush(
+            program.instruction_bytecode[ip],
+            push_res.data,
+        )) return StackError.non_minimal;
+        // std.debug.print("Push Result {any}\n", .{push_res.data});
+        try program.stack.append(StackValue{ .bytes = push_res.data });
+        program.instruction_pointer += push_res.bytes_read;
+    }
     fn evaluate(program: *Program) anyerror!void {
-        while (stateContinue(@intCast(program.instruction_pointer), program)) {
+        while (hasMoreInstructions(program)) {
             const ip = program.instruction_pointer;
             const execution_state = program.control_stack.allTrue();
-            const operation: Opcode = @enumFromInt(program.instruction_bytecode[ip]);
+            const operation = getOperation(program);
             if (isPushOp(operation) and execution_state) {
                 const push_res = try readPush(
                     program.instruction_bytecode[ip..],
@@ -127,10 +153,64 @@ pub const VirtualMachine = struct {
             continue;
         }
     }
+    pub fn evaluateProto(p: *Program) !void {
+        const unlock_code = p.context.tx.inputs[p.context.input_index].script;
+        const lock_code = p.context.utxo[p.context.input_index].script;
+
+        if (unlock_code.len > ConsensusBch2025.maximum_bytecode_length)
+            return VerifyError.excessive_standard_unlocking_bytecode_length;
+        if (lock_code.len > ConsensusBch2025.maximum_bytecode_length)
+            return VerifyError.maximum_bytecode_length_lockscript;
+        p.instruction_bytecode = unlock_code;
+
+        // Unlocking eval
+        _ = try executeProgram(p);
+        if (!p.control_stack.empty()) return VerifyError.non_empty_control_stack;
+
+        var stack_clone = try std.BoundedArray(StackValue, 10_000).init(0);
+        _ = try stack_clone.appendSlice(p.stack.slice());
+
+        p.instruction_bytecode = lock_code;
+        p.instruction_pointer = 0;
+
+        // Locking eval
+        _ = try executeProgram(p);
+        const lockscript_eval = readScriptBool(p.stack.get(p.stack.len - 1).bytes);
+        if (!lockscript_eval) return VerifyError.non_truthy_stack_top_item_locking_eval;
+        if (!p.control_stack.empty()) return VerifyError.non_empty_control_stack;
+        // std.debug.print("POST LOCK STACK {any}\n", .{p.stack.get(p.stack.len - 1)});
+
+        const is_p2sh = Script.isP2SH(lock_code);
+        if (!is_p2sh) {
+            if (p.stack.len != 1) {
+                return StackError.requires_clean_stack_lockingbytecode;
+            }
+        }
+        if (is_p2sh) {
+            p.instruction_bytecode = if (stack_clone.popOrNull()) |p2sh_stack|
+                p2sh_stack.bytes
+            else
+                &[_]u8{};
+            p.instruction_pointer = 0;
+            p.stack.clear();
+            try p.stack.appendSlice(stack_clone.slice());
+
+            // P2SH eval
+            _ = try executeProgram(p);
+            // std.debug.print("POST P2SH STACK {any}\n", .{p.stack.slice()});
+            if (!p.control_stack.empty()) return VerifyError.non_empty_control_stack;
+            if (p.stack.len != 1) {
+                return StackError.requires_clean_stack_redeem_bytecode;
+            }
+            // std.debug.print("STACK {any}\n", .{p.stack.slice()});
+        }
+    }
     fn verify(
         program: *Program,
     ) !bool {
         const context = program.context;
+        const tx = context.tx;
+
         if (context.tx.inputs.len == 0) {
             return VerifyError.no_inputs;
         }
@@ -146,11 +226,9 @@ pub const VirtualMachine = struct {
         if (counting_writer.bytes_written > ConsensusBch2025.maximum_transaction_length_bytes) {
             return VerifyError.max_tx_length_exceeded;
         }
-
-        const lock_script = context.utxo[context.input_index].script;
-        const unlock_script = context.tx.inputs[context.input_index].script;
-
-        if (unlock_script.len > ConsensusBch2025.maximum_standard_unlocking_bytecode_length) return VerifyError.excessive_standard_unlocking_bytecode_length;
+        if (counting_writer.bytes_written < ConsensusBch2025.minimum_transaction_length_bytes) {
+            return VerifyError.minimun_transaction_length;
+        }
 
         const input_value = totalOutputValue(context.utxo);
         const output_value = totalOutputValue(context.tx.outputs);
@@ -184,17 +262,13 @@ pub const VirtualMachine = struct {
                     return VerifyError.nonstandard_ouput_locking_bytecode;
                 }
             }
-            if (!isPushOnly(unlock_script, program.allocator)) return StackError.requires_push_only;
-            // for (context.tx.outputs) |ouput| {
-            //     if (!isStandard(ouput.script, gpa)) {
-            //         return VerifyError.nonstandard;
-            //     }
-            // }
+            for (tx.inputs) |input| {
+                if (!isPushOnly(input.script, program.allocator)) return StackError.requires_push_only;
+            }
             //TODO arbritary outputs
             //TODO handle dust
-            const tokens_verified = try verifyTransactionTokens(context.tx, context.utxo, program.allocator);
-            _ = &tokens_verified;
-            // std.debug.print("TX TOKENS VERIFIED {}\n", .{tokens_Verified});
+            _ = try verifyTransactionTokens(context.tx, context.utxo, program.allocator);
+
             for (context.tx.inputs) |input| {
                 if (input.script.len > ConsensusBch2025.maximum_standard_unlocking_bytecode_length) {
                     return VerifyError.excessive_standard_unlocking_bytecode_length;
@@ -202,78 +276,12 @@ pub const VirtualMachine = struct {
             }
         }
 
-        // std.debug.print("lockscript {any}\n", .{lock_script});
-        // std.debug.print("unlockscript {any}\n", .{unlock_script});
+        _ = try VirtualMachine.evaluateProto(program);
+        // for (tx.inputs) |i| {
+        //     context.input_index = @intCast(i.index);
+        //     _ = try VirtualMachine.evaluateProto(program);
+        // }
 
-        program.instruction_bytecode = unlock_script;
-        program.metrics.setScriptLimits(true, unlock_script.len);
-
-        var stack_clone = try std.BoundedArray(StackValue, 10_000).init(0);
-
-        _ = try evaluate(program);
-
-        try stack_clone.appendSlice(program.stack.slice());
-
-        // const unlocking_script_eval = if (program.stack.popOrNull()) |top_stack_item|
-        //     readScriptBool(top_stack_item.bytes)
-        // else
-        //     false;
-
-        const p2sh_lock = if (stack_clone.popOrNull()) |p2sh_stack|
-            p2sh_stack
-        else
-            StackValue{ .bytes = &[_]u8{} };
-
-        program.instruction_bytecode = lock_script;
-        program.instruction_pointer = 0;
-
-        _ = try evaluate(program);
-
-        if (program.stack.len == 0) return VerifyError.empty_stack_on_lockscript_eval;
-        // std.debug.print("LOCKSCRIPT EVAL {any}\n", .{program.stack.slice()});
-        const lockscript_eval = readScriptBool(program.stack.get(program.stack.len - 1).bytes);
-        // std.debug.print("LOCKSCRIPT EVAL {any}\n", .{lockscript_eval});
-        const is_p2sh = Script.isP2SH(lock_script);
-
-        if (is_p2sh) {
-            // std.debug.print("P2SH STACK {any}\n", .{program.stack.slice()});
-            program.stack.clear();
-            // std.debug.print("P2SH STACK {any}\n", .{program.stack.slice()});
-            // std.debug.print("P2SH LOCK{any}\n", .{p2sh_lock.bytes});
-            try program.stack.appendSlice(stack_clone.slice());
-            program.instruction_bytecode = p2sh_lock.bytes;
-            program.instruction_pointer = 0;
-
-            _ = try evaluate(program);
-
-            if (program.stack.len != 1) {
-                return StackError.requires_clean_stack_redeem_bytecode;
-            }
-
-            const p2sh_eval = readScriptBool(program.stack.pop().bytes);
-            const op_cost_exceeded = program.metrics.isOverOpCostLimit(true);
-            const hash_iterations_exceeded = program.metrics.isOverHashItersLimit();
-
-            if (op_cost_exceeded) {
-                return VerifyError.operation_cost_exceeded;
-            }
-            if (hash_iterations_exceeded) {
-                return VerifyError.hashing_limit_exceeded;
-            }
-            if (!p2sh_eval) {
-                return VerifyError.non_truthy_stack_top_item;
-            }
-            if (!program.control_stack.empty()) {
-                return VerifyError.non_empty_control_stack;
-            }
-            // std.debug.print("OP COST EXCEEDED P2SH {any}\n", .{metrics});
-            // const result = !op_cost_exceeded and !hash_iterations_exceeded and eval_result;
-            return p2sh_eval and lockscript_eval;
-        }
-
-        // const eval_result = readScriptBool(stack.pop().bytes);
-        // const eval_result = unlocking_script_eval and lockscript_eval;
-        const eval_result = lockscript_eval;
         const op_cost_exceeded = program.metrics.isOverOpCostLimit(true);
         const hash_iterations_exceeded = program.metrics.isOverHashItersLimit();
 
@@ -283,29 +291,52 @@ pub const VirtualMachine = struct {
         if (hash_iterations_exceeded) {
             return VerifyError.hashing_limit_exceeded;
         }
-        if (!eval_result) {
-            // std.debug.print("P2PKH BOOL {any}\n", .{eval_result});
-            return VerifyError.non_truthy_stack_top_item;
-        }
         if (!program.control_stack.empty()) {
             return VerifyError.non_empty_control_stack;
         }
-        // std.debug.print("OP COST EXCEEDED P2SH {any}\n", .{metrics});
-        // const result = !op_cost_exceeded and !hash_iterations_exceeded and eval_result;
-        return eval_result;
+        const eval = readScriptBool(program.stack.get(program.stack.len - 1).bytes);
+        return eval;
+    }
+
+    pub fn executeProgram(p: *Program) !void {
+        if (!hasMoreInstructions(p)) return;
+
+        const operation = getOperation(p);
+        if (operation.isUnknownOpcode())
+            return StackError.unassigned_opcode;
+
+        if (operation.isDisabled())
+            return StackError.unassigned_opcode;
+
+        const execution_state = p.control_stack.allTrue();
+        if (!operation.isConditional() and !p.control_stack.isBranchExecuting())
+            return;
+
+        if (isPushOp(operation) and execution_state) {
+            try pushOperation(p);
+            return try @call(.always_tail, executeProgram, .{p});
+        }
+
+        if (execution_state or operation.isConditional()) {
+            try VirtualMachine.execute(p);
+            nextInstruction(p);
+            try @call(.always_tail, executeProgram, .{p});
+        } else {
+            nextInstruction(p);
+            return try @call(.always_tail, executeProgram, .{p});
+        }
     }
 
     fn isPushOp(op: Opcode) bool {
         return @intFromEnum(op) <= @intFromEnum(Opcode.op_16);
     }
 
-    fn stateContinue(pc: u32, program: *Program) bool {
-        return if (pc < program.instruction_bytecode.len)
-            true
-        else
-            false;
+    pub fn hasMoreInstructions(p: *Program) bool {
+        const ip = p.instruction_pointer;
+        const len = p.instruction_bytecode.len;
+        return if (ip < len) true else false;
     }
-    const opcodeToFuncTable = [256]Instruction{
+    pub const opcodeToFuncTable = [256]Instruction{
         &op_0,
         &op_pushbytes_1,
         &op_pushbytes_2,
@@ -985,24 +1016,35 @@ pub fn op_if(program: *Program) anyerror!void {
 }
 
 pub fn op_notif(program: *Program) anyerror!void {
-    const top = program.stack.get(program.stack.len - 1);
-    const b = !readScriptBool(top.bytes);
+    var b = false;
+
+    if (program.control_stack.allTrue()) {
+        if (program.stack.len < 1) {
+            return error.unbalanced_conditional;
+        }
+        const top = program.stack.get(program.stack.len - 1);
+
+        b = !readScriptBool(top.bytes);
+    }
     _ = program.stack.pop();
+
     program.control_stack.push(b);
 }
 
 pub fn op_verif(program: *Program) anyerror!void {
-    if (program.stack.len < 1) {
-        return error.read_empty_stack;
-    }
+    _ = program;
+    return error.DisabledOpcode;
+    // if (program.stack.len < 1) {
+    //     return error.read_empty_stack;
+    // }
 
-    const top = program.stack.get(program.stack.len - 1);
-    const b = readScriptBool(top.bytes);
-    if (b) {
-        _ = program.stack.pop();
-    } else {
-        return error.verify;
-    }
+    // const top = program.stack.get(program.stack.len - 1);
+    // const b = readScriptBool(top.bytes);
+    // if (b) {
+    //     _ = program.stack.pop();
+    // } else {
+    //     return error.verify;
+    // }
 }
 
 pub fn op_vernotif(program: *Program) anyerror!void {
@@ -1076,6 +1118,7 @@ pub fn op_2dup(program: *Program) anyerror!void {
     const item2_copy = try program.allocator.dupe(u8, item2.bytes);
     try program.stack.append(StackValue{ .bytes = item1_copy });
     try program.stack.append(StackValue{ .bytes = item2_copy });
+    // std.debug.print("OP_2DUP {any}\n", .{program.stack.get(program.stack.len - 1)});
 }
 
 pub fn op_3dup(program: *Program) anyerror!void {
@@ -1085,6 +1128,7 @@ pub fn op_3dup(program: *Program) anyerror!void {
     const item1 = program.stack.get(program.stack.len - 3);
     const item2 = program.stack.get(program.stack.len - 2);
     const item3 = program.stack.get(program.stack.len - 1);
+
     const item1_copy = try program.allocator.dupe(u8, item1.bytes);
     const item2_copy = try program.allocator.dupe(u8, item2.bytes);
     const item3_copy = try program.allocator.dupe(u8, item3.bytes);
@@ -1499,7 +1543,7 @@ pub fn op_equal(program: *Program) anyerror!void {
     const item1 = program.stack.get(program.stack.len - 2);
     const item2 = program.stack.get(program.stack.len - 1);
     const is_equal = std.mem.eql(u8, item1.bytes, item2.bytes);
-    // std.debug.print("OPEQUAL {}\n{any}\n{any}", .{ is_equal, item1, item2 });
+    // std.debug.print("OPEQUAL {}\n{any}\n{any}\n", .{ is_equal, item1, item2 });
 
     // Allocate  only if needed, and ensure it's always freed
     if (is_equal) {
@@ -1564,12 +1608,6 @@ pub fn op_1add(program: *Program) anyerror!void {
     }
     const res = try program.allocator.dupe(u8, val);
     _ = try program.stack.append(StackValue{ .bytes = res });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
-    // if (!stateContinue(pc, program)) return;
-    // try @call(.always_tail, InstructionFuncs.lookup(@as(
-    //     Opcode,
-    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-    // )), .{ pc + 1, program });
 }
 
 pub fn op_1sub(program: *Program) anyerror!void {
@@ -1660,11 +1698,10 @@ pub fn op_not(program: *Program) anyerror!void {
     if (program.stack.len < 1) {
         return error.read_empty_stack;
     }
-    const item = program.stack.get(program.stack.len - 1);
-    var script_num = try scriptIntParse(item.bytes, program.allocator);
+    const item = program.stack.pop();
+    var script_num = try readScriptInt(item.bytes, program.allocator);
     _ = try script_num.set(@intFromBool(script_num.eqlZero()));
 
-    _ = program.stack.pop();
     const val = try encodeScriptIntMininal(&script_num, program.allocator);
 
     if (val.len > ConsensusBch2025.maximum_bytecode_length) {
@@ -1673,11 +1710,6 @@ pub fn op_not(program: *Program) anyerror!void {
     const res = try program.allocator.dupe(u8, val);
     _ = try program.stack.append(StackValue{ .bytes = res });
     // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
-    // if (!stateContinue(pc, program)) return;
-    // try @call(.always_tail, InstructionFuncs.lookup(@as(
-    //     Opcode,
-    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-    // )), .{ pc + 1, program });
 }
 
 pub fn op_0notequal(program: *Program) anyerror!void {
@@ -1860,11 +1892,13 @@ pub fn op_mod(program: *Program) anyerror!void {
 pub fn op_lshift(program: *Program) anyerror!void {
     // _ = pc;
     _ = program;
+    return error.DisabledOpcode;
 }
 
 pub fn op_rshift(program: *Program) anyerror!void {
     // _ = pc;
     _ = program;
+    return error.DisabledOpcode;
 }
 
 pub fn op_booland(program: *Program) anyerror!void {
@@ -2589,166 +2623,11 @@ pub fn op_checkmultisig(program: *Program) anyerror!void {
 }
 
 pub fn op_checkmultisigverify(program: *Program) anyerror!void {
-    var success = true;
-    var bytes_hashed: usize = 0;
-
-    const index_key_count: usize = 1; // Position of N
-    if (program.stack.len < index_key_count) {
-        return error.invalid_stack_op;
-    }
-    var n = try readScriptInt(program.stack.get(program.stack.len - index_key_count).bytes, program.allocator);
-    const num_pubkeys = try n.to(u64);
-
-    if (num_pubkeys < 0 or num_pubkeys > Consensus.MAX_PUBKEYS_MULTISIG) {
-        return error.max_publey_mulsig;
-    }
-
-    // First pushed pubkey is num_pubkeys positions before N
-    const index_first_pubkey: usize = @intCast(index_key_count + num_pubkeys);
-    const index_sig_count = index_first_pubkey + 1;
-    if (program.stack.len < index_sig_count) {
-        return error.invalid_stack_op;
-    }
-    var read_sig_counts = try readScriptInt(program.stack.get(program.stack.len - index_sig_count).bytes, program.allocator);
-    const sig_count = try read_sig_counts.to(u64);
-
-    if (sig_count < 0 or sig_count > num_pubkeys) {
-        return error.multisig_sig_and_pubkey_missmatch;
-    }
-
-    // First pushed signature is sig_count positions before M
-    const index_first_sig: usize = @intCast(index_sig_count + sig_count);
-    const index_dummy: usize = index_first_sig + 1;
-
-    if (program.stack.len < index_dummy) {
-        return error.invalid_stack_op;
-    }
-
-    var checkbits: u32 = 0;
-    var i_key: u5 = 0;
-
-    if (program.stack.get(program.stack.len - index_dummy).bytes.len != 0) {
-        const dummy_item = program.stack.get(program.stack.len - index_dummy);
-        _ = try decodeBitfield(dummy_item.bytes, @intCast(num_pubkeys), &checkbits);
-
-        if (@popCount(checkbits) != @as(u32, @truncate(@abs(sig_count)))) {
-            return error.invalid_bit_count;
-        }
-
-        for (0..@intCast(sig_count)) |i_sig| {
-            if (checkbits >> i_key == 0) {
-                return error.invalid_bit_range;
-            }
-            if (i_key >= num_pubkeys) {
-                return error.max_pubkey_mulsig;
-            }
-            while (((checkbits >> i_key) & 0x01) == 0) {
-                i_key += 1;
-            }
-
-            // Get signature in original push order - subtract i_sig from index_first_sig
-            const sig = program.stack.get(program.stack.len - (index_first_sig - i_sig));
-
-            // Get pubkey in original push order - subtract i_key from index_first_pubkey
-            const pubkey = program.stack.get(program.stack.len - (index_first_pubkey - i_key));
-            var tmp_bytes_hashed: usize = 0;
-            // std.debug.print("CHECK MULTI SIG SCHNORR {any}\n ", .{sig.bytes.len});
-            if (sig.bytes.len > 65 or sig.bytes.len == 0) {
-                return error.non_schnorr_signature_in_schnorr_multisig;
-            }
-            success = try checkSig(
-                program.context,
-                sig.bytes,
-                pubkey.bytes,
-                program.instruction_bytecode[0..][0..],
-                &tmp_bytes_hashed,
-                program.allocator,
-            );
-            if (!success) {
-                return error.non_null_signature_failure;
-            }
-            // std.debug.print("CHECK MULTI SIG SCHNORR {any}\n ", .{success});
-            if (tmp_bytes_hashed > bytes_hashed) {
-                bytes_hashed = tmp_bytes_hashed;
-            }
-            // metrics.tallySigChecks(1);
-            i_key += 1;
-        }
-
-        if (bytes_hashed > 0) {
-            // metrics.tallyHashOp(@intCast(bytes_hashed), true);
-        }
-        if ((checkbits >> i_key) != 0) {
-            return error.invalid_bit_count;
-        }
-    } else {
-        var remaining_sigs = sig_count;
-        var remaining_keys = num_pubkeys;
-        var all_signatures_null = true;
-        while (success and remaining_sigs > 0) {
-            // Calculate indices for the current signature and pubkey we're checking
-            // For signatures: we start at first_sig and work backwards
-            const sig_index = index_first_sig - (sig_count - remaining_sigs);
-            // For pubkeys: we start at first_pubkey and work backwards
-            const pubkey_index = index_first_pubkey - (num_pubkeys - remaining_keys);
-
-            const sig = program.stack.get(@intCast(program.stack.len - sig_index));
-            if (sig.bytes.len == 65) {
-                return error.schnorr_signature_in_legacy_multisig;
-            }
-            const pubkey = program.stack.get(@intCast(program.stack.len - pubkey_index));
-
-            var tmp_bytes_hashed: usize = 0;
-            const is_valid_sig = try checkSig(
-                program.context,
-                sig.bytes,
-                pubkey.bytes,
-                program.instruction_bytecode[0..][0..],
-                &tmp_bytes_hashed,
-                program.allocator,
-            );
-            if (tmp_bytes_hashed > bytes_hashed) {
-                bytes_hashed = tmp_bytes_hashed;
-            }
-            for (0..@intCast(sig_count)) |i| {
-                if (program.stack.get(@intCast(program.stack.len - sig_index + i)).bytes.len > 0) {
-                    all_signatures_null = false;
-                }
-            }
-
-            if (is_valid_sig) {
-                remaining_sigs -= 1;
-            }
-            remaining_keys -= 1;
-
-            if (remaining_sigs > remaining_keys) {
-                success = false;
-            }
-        }
-        if (!all_signatures_null) {
-            // metrics.tallySigChecks(@intCast(num_pubkeys));
-            if (bytes_hashed > 0) {
-                // metrics.tallyHashOp(@intCast(bytes_hashed), true);
-            }
-        }
-    }
-    for (0..index_dummy) |_| {
-        _ = program.stack.pop();
-    }
-    // const val = &[_]u8{@intCast(@intFromBool(success))};
-    // const res = try program.allocator.dupe(u8, val);
-    // try program.stack.append(StackValue{ .bytes = res });
-    // std.debug.print("CHECK MULTI SIG RES {any}\n", .{success});
-
+    _ = try op_checkmultisig(program);
+    const top = program.stack.get(program.stack.len - 1);
+    const res = readScriptBool(top.bytes);
+    if (!res) return error.verify else _ = program.stack.pop();
     // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
-    if (!success) {
-        return error.verify;
-    }
-    // if (!stateContinue(pc, program)) return;
-    // try @call(.always_tail, InstructionFuncs.lookup(@as(
-    //     Opcode,
-    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-    // )), .{ pc + 1, program });
 }
 
 pub fn op_nop1(program: *Program) anyerror!void {
@@ -2952,11 +2831,6 @@ pub fn op_reversebytes(program: *Program) anyerror!void {
 
     program.stack.set(program.stack.len - 1, StackValue{ .bytes = stack_top.bytes });
     // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
-    // if (!stateContinue(pc, program)) return;
-    // try @call(.always_tail, InstructionFuncs.lookup(@as(
-    //     Opcode,
-    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-    // )), .{ pc + 1, program });
 }
 
 pub fn op_unknown189(program: *Program) anyerror!void {
@@ -2988,7 +2862,9 @@ pub fn op_inputindex(program: *Program) anyerror!void {
 
 pub fn op_activebytecode(program: *Program) anyerror!void {
     const code = program.instruction_bytecode[program.code_seperator..][0..];
-    try program.stack.append(StackValue{ .bytes = code });
+    const copy = try program.allocator.dupe(u8, code);
+    try program.stack.append(StackValue{ .bytes = copy });
+
     // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
 }
 
@@ -3743,6 +3619,12 @@ pub const ConditionalStack = struct {
             // anything but the first false value is unobservable.
         }
     }
+    pub fn isBranchExecuting(self: *ConditionalStack) bool {
+        if (self.empty()) {
+            return true;
+        }
+        return self.allTrue();
+    }
 };
 pub fn checkLockTime(time: i64, ctx: *ScriptExecContext) bool {
     const input_index = ctx.*.input_index;
@@ -3959,15 +3841,8 @@ test "simple" {
     var genp_alloc = std.heap.GeneralPurposeAllocator(.{}){};
     const ally = genp_alloc.allocator();
 
-    var code = [_]u8{
-        0x51,
-        0x51,
-        0x93,
-        0x51,
-        0x93,
-        0x51,
-        0x93,
-    };
+    var code = [_]u8{ 0x51, 0x51, 0x93, 0x51, 0x93, 0x51, 0x93 };
+
     var script_exec = ScriptExecContext.init();
     const tx = Transaction.init();
     script_exec.tx = tx;
@@ -4047,7 +3922,7 @@ test "vmbtests" {
             const identifier = item.array.items[0].string;
             const description = item.array.items[1].string;
             const skip = blk: {
-                const phrases = [_][]const u8{ "authorization", "before upgrade" };
+                const phrases = [_][]const u8{ "authorization", "before upgrade", "benchmark" };
 
                 for (phrases) |phrase| {
                     var it = std.mem.window(u8, description, phrase.len, 1);
@@ -4060,7 +3935,7 @@ test "vmbtests" {
 
                 break :blk false;
             };
-            const specific_test = "j9ml3h";
+            const specific_test = "fe70t0";
             const all = identifier;
             _ = &all;
             _ = &specific_test;
@@ -4106,7 +3981,7 @@ test "vmbtests" {
                     failed_verifications += 1;
                     continue;
                 };
-                std.debug.print("ID {s}\n", .{identifier});
+                // std.debug.print("ID {s}\n", .{identifier});
                 // const sig_cache = SigningContextCache.init();
                 var script_exec = ScriptExecContext{
                     .input_index = @intCast(input_index),
@@ -4114,101 +3989,32 @@ test "vmbtests" {
                     .tx = tx_decoded,
                     .signing_cache = SigningContextCache.init(),
                 };
-                var sigser_buff = [_]u8{0} ** (ConsensusBch2025.maximum_standard_transaction_size * 2);
+                var sigser_buff = [_]u8{0} ** ConsensusBch2025.maximum_standard_transaction_size * 2;
                 try script_exec.computeSigningCache(&sigser_buff);
-
-                // const p = script_exec.signing_cache;
-                // std.debug.print("HashSeq:{x}\nHashInputs:{x}\nHashoutputs:{x}\nHashUtxos:{x}\n", .{
-                //     p.hash_sequence,
-                //     p.hash_prevouts,
-                //     p.hash_outputs,
-                //     p.hash_utxos,
-                // });
-                // _ = try script_exec.computeSigningCache(&sigser_buff);
-
-                // std.debug.print("unlock_code {any}\n", .{unlock_code});
-                // std.debug.print("Testing {s}\n", .{test_file.filename});
-                // const unlock_code = script_exec.tx.inputs[script_exec.input_index].script;
-                // const lock_code = script_exec.utxo[script_exec.input_index].script;
 
                 var program = try Program.init(ally, &script_exec);
 
-                _ = try VirtualMachine.verify(&program);
-
                 verify_start = std.time.microTimestamp();
-
-                // _ = VirtualMachine.evaluate(&program) catch |err| {
-                //     std.debug.print("ID unlock phase {s} {any}\n", .{ identifier, err });
-                //     // std.debug.print("Failed verification  {any}\n", .{err});
-                //     _ = &err;
-                //     // res = try VM.verify(&script_exec, &metrics, ally.allocator());
-
-                //     verification_count += 1;
-                //     failed_verifications += 1;
-                //     continue;
-                // };
-
-                // program.instruction_bytecode = lock_code;
-                // program.instruction_pointer = 0;
-                // std.debug.print("PROGRAM EXEC {any}", .{program.context.signing_cache});
-                // std.debug.print("CODE LEN {any}\n", .{lock_code.len});
-
-                // std.debug.print("STACK UNLOCKING POST {any}\n", .{program.stack.slice()[0]});
-                // std.debug.print("STACK LOCKING CODE {any}\n", .{program.instruction_bytecode});
-
-                // var stack_clone = try std.BoundedArray(StackValue, 10_000).init(0);
-                // try stack_clone.appendSlice(program.stack.slice());
-                // const p2sh_code = if (program.stack.len == 0) StackValue{ .bytes = &[_]u8{} } else stack_clone.pop();
-
-                // _ = VirtualMachine.evaluate(&program) catch |err| {
-                //     std.debug.print("ID lock phase {s} {any}\n", .{ identifier, err });
-                // std.debug.print("Failed verification  {any}\n", .{err});
-                // _ = &err;
-                // res = try VM.verify(&script_exec, &metrics, ally.allocator());
-
-                //     verification_count += 1;
-                //     failed_verifications += 1;
-                //     continue;
-                // };
-                // std.debug.print("STACK LOCK POST {any}\n", .{program.stack.slice()});
-                // const is_p2sh = Script.isP2SH(lock_code);
-                // program.stack
-                // if (is_p2sh) {
-                //     program.stack.clear();
-                //     try program.stack.appendSlice(stack_clone.slice());
-                //     program.instruction_bytecode = p2sh_code.bytes;
-                //     program.instruction_pointer = 0;
-                //     _ = VirtualMachine.evaluate(&program) catch |err| {
-                //         std.debug.print("ID p2sh phase {s} {any}\n", .{ identifier, err });
-                //         // std.debug.print("Failed verification  {any}\n", .{err});
-                //         _ = &err;
-
-                //         verification_count += 1;
-                //         failed_verifications += 1;
-                //         continue;
-                //     };
-                // }
-
+                // _ = try evaluateProto(&program);
+                const res = VirtualMachine.verify(&program) catch |err| {
+                    _ = &err;
+                    std.debug.print("ID {s}\n", .{identifier});
+                    std.debug.print("Failed verification  {any}\n", .{err});
+                    failed_verifications += 1;
+                    verification_count += 1;
+                    continue;
+                };
+                if (!res) {
+                    std.debug.print("ID {s}\n", .{identifier});
+                    std.debug.print("Failed non truthy stack top item {any}\n", .{res});
+                    failed_verifications += 1;
+                }
                 verify_end = std.time.microTimestamp();
-                // std.debug.print("STACK P2SH {any} CODE {any}\n", .{ program_p2sh.stack.slice(), lock_code.bytes });
-                // const duration_ms = verify_end - verify_start;
-
-                // std.debug.print("Verification succeeded for ID {s} in {d}ms\n", .{
-                //     identifier,
-                //     @as(i128, duration_ms),
-                // });
-                // if (!res) {
-                // std.debug.print("ID {s}\n", .{identifier});
-                // std.debug.print("Failed non truthy stack top item {any}\n", .{res});
-                // failed_verifications += 1;
-                // }
-                // _ = &res;
-                // if (res) {
-                // std.debug.print("Testing {s}\nID {s}\n", .{ test_file.filename, identifier });
-                passed_count += 1;
-                // std.debug.print("ID {s}\n", .{identifier});
-                // std.debug.print("VERIFICATION PASSED {s} count {}\n", .{ identifier, passed_count });
-                // }
+                if (res) {
+                    // std.debug.print("ID {s}\n", .{identifier});
+                    // std.debug.print("Testing {s}\nID {s}\n", .{ test_file.filename, identifier });
+                    passed_count += 1;
+                }
                 // verification_count += 1;
 
                 // std.debug.print("Testing: {s}\n", .{
@@ -4258,4 +4064,16 @@ test "vmbtests" {
         // 0,
         @divTrunc(@as(i128, 1_000_000_000), average_verification_time),
     });
+}
+
+const evaluateProto = @import("protoype.zig").evaluateProto;
+
+test "tag" {
+    // var it = std.mem.splitScalar(u8, name, "op_unknown");
+    // var it = std.mem.splitScalar(u8, name, "op_unknown");
+    // std.ascii.isDigit()
+    // std.debug.print("OP {s}", .{it.first()});
+    // while (it.next()) |op| {
+    //     std.debug.print("OP {s}", .{op});
+    // }
 }

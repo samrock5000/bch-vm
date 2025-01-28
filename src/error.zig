@@ -14,6 +14,7 @@ pub const VerifyError = error{
     nonstandard_utxo_locking_bytecode,
     nonstandard_ouput_locking_bytecode,
     non_truthy_stack_top_item,
+    non_truthy_stack_top_item_locking_eval,
     operation_cost_exceeded,
     hashing_limit_exceeded,
     non_empty_control_stack,
@@ -21,11 +22,14 @@ pub const VerifyError = error{
     non_null_signature_failure,
     maximum_control_stack_depth,
     empty_stack_on_lockscript_eval,
+    minimun_transaction_length,
+    maximum_bytecode_length_lockscript,
 };
 pub const StackError = error{
     reserved_opcode,
     unassigned_opcode,
     requires_clean_stack_redeem_bytecode,
+    requires_clean_stack_lockingbytecode,
     requires_clean_stack,
     unsatisfied_locktime,
     negative_locktime,
