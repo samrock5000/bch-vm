@@ -21,6 +21,7 @@ pub fn isPushOnly(code: []u8, allocator: std.mem.Allocator) bool {
         const res = readPushData(code[i..], allocator) catch return false;
         i += res.bytes_read;
 
+        defer freePushResult(res, allocator);
         // If we encounter anything that isn't a push operation, return false
         if (res.bytes_read == 0) return false;
     }
@@ -197,9 +198,6 @@ pub fn readPushData(data: []const u8, alloc: Allocator) !PushResult {
         if (data.len < length + 1) return PushError.InsufficientData;
         const result = try alloc.alloc(u8, length);
         @memcpy(result, data[1 .. length + 1]);
-        // if (result.len == 1 and result[0] == 0) {
-        //     return PushResult{ .data = &.{}, .bytes_read = length + 1 };
-        // }
         return PushResult{ .data = result, .bytes_read = length + 1 };
     }
     // Handle PUSHDATA1
@@ -243,6 +241,10 @@ pub fn readPushData(data: []const u8, alloc: Allocator) !PushResult {
     }
 
     return PushError.InvalidPushOpcode;
+}
+/// Frees the memory allocated for the PushResult.
+pub fn freePushResult(result: PushResult, alloc: std.mem.Allocator) void {
+    alloc.free(result.data);
 }
 test "readPushData" {
     const testing = std.testing;

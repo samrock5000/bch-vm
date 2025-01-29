@@ -22,43 +22,93 @@ const isMinimalDataPush = @import("push.zig").isMinimalDataPush;
 const Instruction = @import("opfuncs.zig").Instruction;
 const opcodeToFuncTable = @import("opfuncs.zig").opcodeToFuncTable;
 const readPush = @import("push.zig").readPushData;
+const freePushResult = @import("push.zig").freePushResult;
 
 const Stack = std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length);
 pub const StackValue = struct {
     bytes: []u8,
 };
-pub const ScriptExecContext = struct {
+
+/// `ScriptExecutionContext` represents the execution context for a script in a transaction.
+/// It encapsulates all the necessary data and state required to execute and validate
+/// a script within the context of a specific transaction input. This includes:
+/// - The index of the input being processed (`input_index`).
+/// - The set of Unspent Transaction Outputs (UTXOs) referenced by the transaction (`utxo`).
+/// - The transaction itself (`tx`), which contains the script being executed.
+/// - A cache for precomputed signing data (`signing_cache`), which optimizes script execution
+///   by avoiding redundant computations.
+///
+/// This struct is typically used during the execution of Bitcoin Cash (or similar) scripts
+/// to ensure that all relevant data is available for validation, signing, and execution.
+pub const ScriptExecutionContext = struct {
+    /// The index of the transaction input being processed. This is used to identify
+    /// which input's script is currently being executed.
     input_index: u32,
+    /// The set of Unspent Transaction Outputs (UTXOs) referenced by the transaction.
+    /// These outputs are used to validate the transaction's inputs and ensure that
+    /// the script has access to the necessary data for execution.
     utxo: []Transaction.Output,
+    /// The transaction being validated. This contains the script being executed,
+    /// as well as other metadata required for validation.
     tx: Transaction,
+    /// A cache for precomputed signing data. This is used to optimize script execution
+    /// by storing intermediate results that can be reused during the signing process.
     signing_cache: SigningCache,
-    pub fn init() ScriptExecContext {
-        return ScriptExecContext{
+    /// Initializes a new `ScriptExecContext` with default values.
+    /// This is typically used to create a clean context before script execution begins.
+    pub fn init() ScriptExecutionContext {
+        return ScriptExecutionContext{
             .input_index = 0,
             .utxo = &[_]Transaction.Output{},
             .tx = Transaction.init(),
             .signing_cache = SigningCache.init(),
         };
     }
-    pub fn computeSigningCache(self: *ScriptExecContext, buf: []u8) !void {
+    pub fn computeSigningCache(self: *ScriptExecutionContext, buf: []u8) !void {
         return try self.signing_cache.compute(self, buf);
     }
 };
-
+/// `Program` represents the state of a script during execution.
+/// It includes the main stack, alternate stack, instruction bytecode, and other
+/// metadata required to execute and validate the script.
 pub const Program = struct {
+    /// The main stack used during script execution. This stack holds values that
+    /// are manipulated by the script's instructions.
     stack: std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length),
+
+    /// The alternate stack used during script execution. This stack is used for
+    /// temporary storage of values that need to be preserved across operations.
     alt_stack: std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length),
+
+    /// The bytecode of the script being executed. This contains the instructions
+    /// that define the script's logic.
     instruction_bytecode: []u8,
+
+    /// The current position in the instruction bytecode. This is used to track
+    /// which instruction is being executed.
     instruction_pointer: usize,
+
+    /// The position of the last `OP_CODESEPARATOR` instruction encountered.
+    /// This is used to handle script segmentation during execution.
     code_seperator: usize,
+
+    /// The allocator used for dynamic memory allocation during script execution.
     allocator: Allocator,
+
+    /// The control stack used to manage flow control structures (e.g., loops,
+    /// conditionals) during script execution.
     control_stack: ControlStack,
+
+    /// Metrics collected during script execution. These can be used for debugging
+    /// or performance analysis.
     metrics: Metrics,
-    context: *ScriptExecContext,
-    // has_error: ?anyerror!void,
+
+    /// A reference to the `ScriptExecContext` associated with this program.
+    /// This provides access to the transaction and UTXO data required for execution.
+    context: *ScriptExecutionContext,
     pub fn init(
         gpa: Allocator,
-        context: *ScriptExecContext,
+        context: *ScriptExecutionContext,
     ) !Program {
         return Program{
             .stack = try std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length).init(0),
@@ -77,11 +127,11 @@ pub const Program = struct {
 
 pub const VirtualMachine = struct {
     pub fn execute(program: *Program) anyerror!void {
-        // const ip = program.instruction_pointer;
         const operation = getOperation(program);
         try @call(.auto, VirtualMachine.opcodeLookup(operation), .{program});
     }
     fn opcodeLookup(op: Opcode) Instruction {
+        std.debug.print("ADDR {any}\n", .{opcodeToFuncTable[@intFromEnum(op)]});
         return opcodeToFuncTable[@intFromEnum(op)];
     }
     fn getCodepoint(program: *Program) u8 {
@@ -100,11 +150,11 @@ pub const VirtualMachine = struct {
     }
     fn pushOperation(program: *Program) !void {
         const ip = program.instruction_pointer;
-        // const execution_state = program.control_stack.empty();
         const push_res = try readPush(
             program.instruction_bytecode[ip..],
             program.allocator,
         );
+        // defer freePushResult(push_res, program.allocator);
         if (!isMinimalDataPush(
             program.instruction_bytecode[ip],
             push_res.data,
@@ -113,7 +163,7 @@ pub const VirtualMachine = struct {
         try program.stack.append(StackValue{ .bytes = push_res.data });
         program.instruction_pointer += push_res.bytes_read;
     }
-    pub fn evaluateProto(p: *Program) !void {
+    pub fn evaluate(p: *Program) !void {
         const unlock_code = p.context.tx.inputs[p.context.input_index].script;
         const lock_code = p.context.utxo[p.context.input_index].script;
 
@@ -138,7 +188,6 @@ pub const VirtualMachine = struct {
         const lockscript_eval = readScriptBool(p.stack.get(p.stack.len - 1).bytes);
         if (!lockscript_eval) return VerifyError.non_truthy_stack_top_item_locking_eval;
         if (!p.control_stack.empty()) return VerifyError.non_empty_control_stack;
-        // std.debug.print("POST LOCK STACK {any}\n", .{p.stack.get(p.stack.len - 1)});
 
         const is_p2sh = Script.isP2SH(lock_code);
         if (!is_p2sh) {
@@ -157,12 +206,10 @@ pub const VirtualMachine = struct {
 
             // P2SH eval
             _ = try executeProgram(p);
-            // std.debug.print("POST P2SH STACK {any}\n", .{p.stack.slice()});
             if (!p.control_stack.empty()) return VerifyError.non_empty_control_stack;
             if (p.stack.len != 1) {
                 return StackError.requires_clean_stack_redeem_bytecode;
             }
-            // std.debug.print("STACK {any}\n", .{p.stack.slice()});
         }
     }
 
@@ -171,37 +218,37 @@ pub const VirtualMachine = struct {
 
         const operation = getOperation(p);
         var control_stack = p.control_stack;
+        if (control_stack.size > ConsensusBch2025.maximum_control_stack_depth) {
+            return StackError.maximum_control_stack_depth;
+        }
         const execution_state = control_stack.allTrue();
 
         // Skip disabled opcodes
         if (operation.isDisabled()) {
             return StackError.disabled_opcode;
         }
-        // std.debug.print("OP {any}\n", .{operation});
-        // std.debug.print("CondStack size {}\n" ++
-        //     "empty {}\n" ++ "All true {}\n\n", .{
-        //     control_stack.size,
-        //     control_stack.empty(),
-        //     control_stack.allTrue(),
-        // });
-
+        std.debug.print("OP {any}\n", .{operation});
         // Handle push operations only if the control stack allows execution
         if (isPushOp(operation)) {
-            if (!execution_state and !operation.isConditional()) {
+            if (!execution_state) {
+                if (operation == Opcode.op_reserved) {
+                    advancePointer(p);
+                    return try @call(.always_tail, executeProgram, .{p});
+                }
                 const push_data = try readPush(
                     p.instruction_bytecode[p.instruction_pointer..],
                     p.allocator,
                 );
-                if (!isMinimalDataPush(
-                    p.instruction_bytecode[p.instruction_pointer],
-                    push_data.data,
-                )) return StackError.non_minimal;
+                p.metrics.operations += 1;
+                p.metrics.tallyOp(May2025.OPCODE_COST);
                 // If the control stack indicates that this block should not be executed,
                 // skip the push operation and advance the pointer.
                 p.instruction_pointer += push_data.bytes_read;
                 // advancePointer(p);
                 return try @call(.always_tail, executeProgram, .{p});
             } else {
+                p.metrics.operations += 1;
+                p.metrics.tallyOp(May2025.OPCODE_COST);
                 // Execute the push operation if the control stack allows it.
                 try pushOperation(p);
                 // advancePointer(p);
@@ -213,6 +260,8 @@ pub const VirtualMachine = struct {
         if (execution_state or operation.isConditional()) {
             try VirtualMachine.execute(p);
             advancePointer(p);
+            p.metrics.operations += 1;
+            p.metrics.tallyOp(May2025.OPCODE_COST);
             return try @call(.always_tail, executeProgram, .{p});
         } else {
             // Skip non-conditional operations if the control stack indicates no execution.
@@ -225,6 +274,11 @@ pub const VirtualMachine = struct {
     ) !bool {
         const context = program.context;
         const tx = context.tx;
+        // defer {
+        //     for (program.stack.buffer) |item| {
+        //         program.allocator.free(item);
+        //     }
+        // }
 
         if (context.tx.inputs.len == 0) {
             return VerifyError.no_inputs;
@@ -291,7 +345,8 @@ pub const VirtualMachine = struct {
             }
         }
 
-        _ = try VirtualMachine.evaluateProto(program);
+        // program.metrics.op_cost
+        _ = try VirtualMachine.evaluate(program);
         // for (tx.inputs) |i| {
         //     context.input_index = @intCast(i.index);
         //     _ = try VirtualMachine.evaluateProto(program);
@@ -299,7 +354,6 @@ pub const VirtualMachine = struct {
 
         const op_cost_exceeded = program.metrics.isOverOpCostLimit(true);
         const hash_iterations_exceeded = program.metrics.isOverHashItersLimit();
-
         if (op_cost_exceeded) {
             return VerifyError.operation_cost_exceeded;
         }
@@ -386,15 +440,18 @@ test "simple" {
     // std.debug.print("STACKPOST {any}\n", .{program.stack.slice()});
 }
 test "vmbtests" {
-    var genp_alloc = std.heap.GeneralPurposeAllocator(.{}){};
+    // var genp_alloc = std.heap.GeneralPurposeAllocator(.{}){};
     // defer {
     //     const check = genp_alloc.detectLeaks();
     //     std.debug.print("LEAKED {any}", .{check});
     // }
-    const ally = genp_alloc.allocator();
+    // const ally = genp_alloc.allocator();
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const ally = arena.allocator();
 
-    const path = "bch_2025_standard";
-    // const path = "bch_2025_invalid";
+    // const path = "bch_2025_standard";
+    const path = "bch_2025_invalid";
     const base_url = try std.fmt.allocPrint(std.heap.page_allocator, "../vmb_tests/{s}", .{path});
 
     var current_dir = try std.fs.cwd().openDir(base_url, .{ .iterate = true });
@@ -458,7 +515,8 @@ test "vmbtests" {
             const identifier = item.array.items[0].string;
             const description = item.array.items[1].string;
             const skip = blk: {
-                const phrases = [_][]const u8{ "authorization", "before upgrade", "benchmark" };
+                // const phrases = [_][]const u8{ "authorization", "before upgrade", "benchmark" };
+                const phrases = [_][]const u8{ "authorization", "before upgrade" };
 
                 for (phrases) |phrase| {
                     var it = std.mem.window(u8, description, phrase.len, 1);
@@ -471,11 +529,11 @@ test "vmbtests" {
 
                 break :blk false;
             };
-            const specific_test = "jdtsv0";
+            const specific_test = "6ffhwj";
             const all = identifier;
             _ = &all;
             _ = &specific_test;
-            const test_match = std.mem.eql(u8, identifier, all);
+            const test_match = std.mem.eql(u8, identifier, specific_test);
             _ = &test_match;
             // const test_match_file = std.mem.eql(u8, "core.cashtokens.vmb_tests.json", test_file.filename);
             const test_match_file = std.mem.eql(u8, "core.signing-serialization.vmb_tests.json", test_file.filename);
@@ -502,6 +560,7 @@ test "vmbtests" {
 
                 // std.debug.print("Testing {s}\nID {s}\n", .{ test_file.filename, identifier });
                 const utxos = Transaction.readOutputs(&utxo_writer, ally) catch |err| {
+                    std.debug.print("ID {s}\n", .{identifier});
                     std.debug.print("UTXO decoding error {any}\n", .{err});
                     failed_verifications += 1;
                     continue;
@@ -519,7 +578,7 @@ test "vmbtests" {
                 };
                 // std.debug.print("ID {s}\n", .{identifier});
                 // const sig_cache = SigningContextCache.init();
-                var script_exec = ScriptExecContext{
+                var script_exec = ScriptExecutionContext{
                     .input_index = @intCast(input_index),
                     .utxo = utxos,
                     .tx = tx_decoded,
@@ -533,19 +592,20 @@ test "vmbtests" {
                 program.metrics.setScriptLimits(true, unlock_code.len);
 
                 verify_start = std.time.microTimestamp();
-                // _ = try evaluateProto(&program);
                 const res = VirtualMachine.verify(&program) catch |err| {
                     _ = &err;
-                    std.debug.print("ID {s}\n", .{identifier});
-                    std.debug.print("Failed verification  {any}\n", .{err});
+                    // std.debug.print("ID {s}\n", .{identifier});
+                    // std.debug.print("Failed verification  {any}\n", .{err});
                     failed_verifications += 1;
                     verification_count += 1;
                     continue;
                 };
                 if (!res) {
-                    std.debug.print("ID {s}\n", .{identifier});
+                    // std.debug.print("ID {s}\n", .{identifier});
                     //     std.debug.print("Failed non truthy stack top item {any}\n", .{res});
+                    verification_count += 1;
                     failed_verifications += 1;
+                    continue;
                 }
 
                 verify_end = std.time.microTimestamp();
@@ -553,17 +613,30 @@ test "vmbtests" {
                     // std.debug.print("ID {s}\n", .{identifier});
                     // std.debug.print("Testing {s}\nID {s}\n", .{ test_file.filename, identifier });
                     passed_count += 1;
+                    verification_count += 1;
                 }
-                // verification_count += 1;
-
-                // std.debug.print("Testing: {s}\n", .{
-                //     test_file.filename,
-                // });
-                // std.debug.print("Verify  {any}\n\n", .{res});
                 end_time = std.time.nanoTimestamp();
                 const verification_duration = verify_end - verify_start;
                 total_verification_time += verification_duration;
-                verification_count += 1;
+                const test_match_single = std.mem.eql(u8, identifier, specific_test);
+                if (test_match_single) {
+                    std.debug.print("metrics\n" ++
+                        "sig checks: {}\n" ++
+                        "op cost: {}\n" ++
+                        "hash iterations: {}\n" ++
+                        "is over cost limit: {}\n" ++
+                        "is over hash {}\n" ++
+                        // "has limits {}\n" ++
+                        "composite op cost: {}\n", .{
+                        program.metrics.sig_checks,
+                        program.metrics.op_cost,
+                        program.metrics.hash_digest_iterations,
+                        program.metrics.isOverOpCostLimit(true),
+                        program.metrics.isOverHashItersLimit(),
+                        // program.metrics.hasvalidscriptlimits(),
+                        program.metrics.getCompositeOpCost(true),
+                    });
+                }
             }
         }
     }
@@ -572,22 +645,6 @@ test "vmbtests" {
         @divTrunc(total_verification_time, @as(i128, @intCast(verification_count)))
     else
         0;
-    // std.debug.print("metrics\n" ++
-    //     "sig checks: {}\n" ++
-    //     "op cost: {}\n" ++
-    //     "hash iterations: {}\n" ++
-    //     "is over cost limit: {}\n" ++
-    //     "is over hash {}\n" ++
-    //     // "has limits {}\n" ++
-    //     "composite op cost: {}\n", .{
-    //     program.metrics.sig_checks,
-    //     program.metrics.op_cost,
-    //     program.metrics.hash_digest_iterations,
-    //     program.metrics.isOverOpCostLimit(true),
-    //     program.metrics.isOverHashItersLimit(),
-    //     // program.metrics.hasvalidscriptlimits(),
-    //     program.metrics.getCompositeOpCost(true),
-    // });
     std.debug.print("\nPerformance Statistics:\n" ++
         "Total Execution Time: {d} ns\n" ++
         "Total Verification Time: {d} ns\n" ++

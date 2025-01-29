@@ -14,7 +14,7 @@ const readPush = @import("push.zig").readPushData;
 const BigInt = std.math.big.int.Managed;
 const std = @import("std");
 const StackValue = @import("stack.zig").StackValue;
-const ScriptExecContext = @import("stack.zig").ScriptExecContext;
+const ScriptExecContext = @import("stack.zig").ScriptExecutionContext;
 const Ecdsa = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256oSha256;
 const EcdsaDataSig = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256;
 const Schnorr = @import("schnorr.zig").SchnorrBCH;
@@ -24,6 +24,7 @@ const ConsensusBch2025 = @import("consensus2025.zig").ConsensusBch2025.init();
 const Consensus = @import("consensus2025.zig");
 
 pub const Instruction = *const fn (program: *Program) anyerror!void;
+
 pub const opcodeToFuncTable = [256]Instruction{
     &op_0,
     &op_pushbytes_1,
@@ -885,7 +886,7 @@ pub fn op_ifdup(program: *Program) anyerror!void {
     const b = readScriptBool(top.bytes);
     if (b) {
         try program.stack.append(top);
-        // program.metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+        program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
     }
 }
 

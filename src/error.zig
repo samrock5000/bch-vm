@@ -20,12 +20,12 @@ pub const VerifyError = error{
     non_empty_control_stack,
     invalid_sighash_type,
     non_null_signature_failure,
-    maximum_control_stack_depth,
     empty_stack_on_lockscript_eval,
     minimun_transaction_length,
     maximum_bytecode_length_lockscript,
 };
 pub const StackError = error{
+    maximum_control_stack_depth,
     reserved_opcode,
     disabled_opcode,
     unassigned_opcode,

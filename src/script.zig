@@ -1,5 +1,6 @@
 const std = @import("std");
 const isPushOnly = @import("push.zig").isPushOnly;
+const ConsensusBch2025 = @import("consensus2025.zig").ConsensusBch2025.init();
 const BigInt = std.math.big.int.Managed;
 // Constants for script operations
 const OP_DUP: u8 = 0x76;
@@ -144,6 +145,7 @@ pub fn scriptIntParseI64(v: []const u8) i64 {
     }
     return ret;
 }
+const StackError = @import("error.zig").StackError;
 pub fn encodeScriptIntMininal(num: *BigInt, allocator: std.mem.Allocator) ![]u8 {
     if (num.eqlZero()) {
         // var result = try allocator.alloc(u8, 1);
@@ -172,7 +174,9 @@ pub fn encodeScriptIntMininal(num: *BigInt, allocator: std.mem.Allocator) ![]u8 
     } else if (neg) {
         result.items[result.items.len - 1] |= 0x80;
     }
-
+    if (result.items.len > ConsensusBch2025.maximum_stack_item_length) {
+        return StackError.exceeded_max_bytecode_length;
+    }
     return result.toOwnedSlice();
 }
 pub fn readScriptBool(v: []const u8) bool {

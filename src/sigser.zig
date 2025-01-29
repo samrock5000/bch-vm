@@ -3,7 +3,7 @@ const Transaction = @import("transaction.zig");
 const Allocator = std.mem.Allocator;
 const sha256 = std.crypto.hash.sha2.Sha256.hash;
 const Encoder = @import("encoding.zig");
-const ScriptExecContext = @import("stack.zig").ScriptExecContext;
+const ScriptExecContext = @import("stack.zig").ScriptExecutionContext;
 // const VM = @import("vm.zig");
 // const SCRIPT_ENABLE_MAY2025 = @import("vm.zig").SCRIPT_ENABLE_MAY2025;
 // const SCRIPT_VM_LIMITS_STANDARD = @import("vm.zig").SCRIPT_VM_LIMITS_STANDARD;
@@ -12,6 +12,7 @@ pub const SigningSer = @This();
 tx: Transaction,
 outpoint: []Transaction.Output,
 idx: usize,
+/// using encodeWithPrecompute
 pub fn encode(
     ctx: *Transaction,
     src_outs: *[]Transaction.Output,
@@ -199,7 +200,6 @@ fn shouldSerializeUtxos(flagtype: u32) bool {
 
 pub fn encodeInputs(tx: Transaction, writer: anytype) !usize {
     var len: usize = 0;
-    // _ = try Encoder.writeVarint(writer, len);
     for (tx.inputs) |*input| {
         len += try input.encode(writer);
     }
@@ -207,7 +207,6 @@ pub fn encodeInputs(tx: Transaction, writer: anytype) !usize {
 }
 pub fn encodeOutpoints(tx: *Transaction, writer: anytype) !usize {
     var len: usize = 0;
-    // _ = try Encoder.writeVarint(writer, len);
     for (tx.inputs) |*input| {
         try writer.writeInt(u256, input.txid, .big);
         len += 32;
@@ -218,11 +217,8 @@ pub fn encodeOutpoints(tx: *Transaction, writer: anytype) !usize {
 }
 pub fn encodeUtxos(utxos: []Transaction.Output, writer: anytype) !usize {
     var len: usize = 0;
-    // _ = &writer;
     for (utxos) |*output| {
         len += try output.encode(writer);
-        // const x = writer.context.getWritten();
-        // std.debug.print("Buffer size: {}\n", .{x.len});
     }
     return len;
 }
@@ -254,29 +250,27 @@ pub const SigningCache = struct {
             .hash_utxos = 0,
         };
     }
-    pub fn compute(self: *SigningCache, ctx: *ScriptExec, buf: []u8) !void {
-        // std.debug.print("{}\n", .{Transaction.calculateOutputsSize(ctx.utxo)});
+    pub fn compute(self: *SigningCache, ctx: *ScriptExecContext, buf: []u8) !void {
         var fb = std.io.fixedBufferStream(buf);
-        // std.debug.print("Buffer length at compute: {}\n", .{buf.len});
         const w = fb.writer();
         _ = try SigningSer.encodeOutpoints(&ctx.tx, w);
-        _ = sha256(fb.getWritten(), buf[0..32], .{});
-        _ = sha256(buf[0..32], buf[0..32], .{});
+        sha256(fb.getWritten(), buf[0..32], .{});
+        sha256(buf[0..32], buf[0..32], .{});
         self.hash_prevouts = std.mem.readInt(u256, buf[0..32], .big);
         fb.reset();
         _ = try SigningSer.encodeSequence(&ctx.tx, w);
-        _ = sha256(fb.getWritten(), buf[32..64], .{});
-        _ = sha256(buf[32..64], buf[32..64], .{});
+        sha256(fb.getWritten(), buf[32..64], .{});
+        sha256(buf[32..64], buf[32..64], .{});
         self.hash_sequence = std.mem.readInt(u256, buf[32..64], .big);
         fb.reset();
         _ = try SigningSer.encodeOutputs(&ctx.tx, w);
-        _ = sha256(fb.getWritten(), buf[64..96], .{});
-        _ = sha256(buf[64..96], buf[64..96], .{});
+        sha256(fb.getWritten(), buf[64..96], .{});
+        sha256(buf[64..96], buf[64..96], .{});
         self.hash_outputs = std.mem.readInt(u256, buf[64..96], .big);
         fb.reset();
         _ = try SigningSer.encodeUtxos(ctx.utxo, w);
-        _ = sha256(fb.getWritten(), buf[96..128], .{});
-        _ = sha256(buf[96..128], buf[96..128], .{});
+        sha256(fb.getWritten(), buf[96..128], .{});
+        sha256(buf[96..128], buf[96..128], .{});
         self.hash_utxos = std.mem.readInt(u256, buf[96..128], .big);
         fb.reset();
     }
@@ -340,7 +334,6 @@ pub fn encodeWithPrecompute(
         }
     }
 
-    // std.debug.print("pos {} end {}\n", .{ sigser_writer.fbs.pos, try sigser_writer.fbs.getEndPos() });
     len += try Encoder.writeVarBytes(sigser_writer.fbs.writer(), script_slice);
     try sigser_writer.fbs.writer().writeInt(u64, src_outs.*[idx].satoshis, .little);
     len += 8;
@@ -423,7 +416,6 @@ const SigHashTestData = struct {
     // sighash_no_fork: []const u8,
     // sighash_protection: []const u8,
 };
-const ScriptExec = @import("stack.zig").ScriptExecContext;
 
 test "precompute" {
     var buff: [1024 * 4]u8 = undefined;
