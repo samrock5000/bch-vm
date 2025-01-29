@@ -27,6 +27,7 @@ pub const VerifyError = error{
 };
 pub const StackError = error{
     reserved_opcode,
+    disabled_opcode,
     unassigned_opcode,
     requires_clean_stack_redeem_bytecode,
     requires_clean_stack_lockingbytecode,

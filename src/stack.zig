@@ -55,6 +55,7 @@ pub const Program = struct {
     control_stack: ConditionalStack,
     metrics: Metrics,
     context: *ScriptExecContext,
+    // has_error: ?anyerror!void,
     pub fn init(
         gpa: Allocator,
         context: *ScriptExecContext,
@@ -69,6 +70,7 @@ pub const Program = struct {
             .allocator = gpa,
             .context = context,
             .metrics = Metrics.init(),
+            // .has_error = null,
         };
     }
 };
@@ -103,11 +105,11 @@ pub const VirtualMachine = struct {
             program.instruction_bytecode[ip..],
             program.allocator,
         );
+        // std.debug.print("Push Result {any}\n", .{push_res.data});
         if (!isMinimalDataPush(
             program.instruction_bytecode[ip],
             push_res.data,
         )) return StackError.non_minimal;
-        // std.debug.print("Push Result {any}\n", .{push_res.data});
         try program.stack.append(StackValue{ .bytes = push_res.data });
         program.instruction_pointer += push_res.bytes_read;
     }
@@ -164,6 +166,42 @@ pub const VirtualMachine = struct {
             // std.debug.print("STACK {any}\n", .{p.stack.slice()});
         }
     }
+
+    pub fn executeProgram(p: *Program) !void {
+        if (!hasMoreInstructions(p)) return;
+
+        const operation = getOperation(p);
+        const execution_state = p.control_stack.allTrue();
+
+        if (execution_state) {
+            if (operation.isUnknownOpcode()) {
+                return StackError.unassigned_opcode;
+            }
+            if (operation.isDisabled()) {
+                return StackError.disabled_opcode;
+            }
+        }
+
+        if (!operation.isConditional() and !p.control_stack.isBranchExecuting()) {
+            advancePointer(p);
+            try @call(.always_tail, executeProgram, .{p});
+        }
+
+        if (isPushOp(operation) and execution_state) {
+            try pushOperation(p);
+            return try @call(.always_tail, executeProgram, .{p});
+        }
+
+        if (execution_state or operation.isConditional()) {
+            try VirtualMachine.execute(p);
+            advancePointer(p);
+            try @call(.always_tail, executeProgram, .{p});
+        } else {
+            advancePointer(p);
+            return try @call(.always_tail, executeProgram, .{p});
+        }
+    }
+
     fn verify(
         program: *Program,
     ) !bool {
@@ -257,38 +295,6 @@ pub const VirtualMachine = struct {
         return eval;
     }
 
-    pub fn executeProgram(p: *Program) !void {
-        if (!hasMoreInstructions(p)) return;
-
-        const operation = getOperation(p);
-        // //TODO SHOULD NOT BE CHECKED IN UNEXECUTED STATE?
-        // if (operation.isUnknownOpcode())
-        //     return StackError.unassigned_opcode;
-
-        if (operation.isDisabled())
-            return StackError.unassigned_opcode;
-
-        const execution_state = p.control_stack.allTrue();
-        if (!operation.isConditional() and !p.control_stack.isBranchExecuting()) {
-            advancePointer(p);
-            try @call(.always_tail, executeProgram, .{p});
-        }
-
-        if (isPushOp(operation) and execution_state) {
-            try pushOperation(p);
-            return try @call(.always_tail, executeProgram, .{p});
-        }
-
-        if (execution_state or operation.isConditional()) {
-            try VirtualMachine.execute(p);
-            advancePointer(p);
-            try @call(.always_tail, executeProgram, .{p});
-        } else {
-            advancePointer(p);
-            return try @call(.always_tail, executeProgram, .{p});
-        }
-    }
-
     fn isPushOp(op: Opcode) bool {
         return @intFromEnum(op) <= @intFromEnum(Opcode.op_16);
     }
@@ -375,8 +381,8 @@ test "vmbtests" {
     // }
     const ally = genp_alloc.allocator();
 
-    const path = "bch_2025_standard";
-    // const path = "bch_2025_invalid";
+    // const path = "bch_2025_standard";
+    const path = "bch_2025_invalid";
     const base_url = try std.fmt.allocPrint(std.heap.page_allocator, "../vmb_tests/{s}", .{path});
 
     var current_dir = try std.fs.cwd().openDir(base_url, .{ .iterate = true });
@@ -451,11 +457,11 @@ test "vmbtests" {
 
                 break :blk false;
             };
-            const specific_test = "g4fdlz";
+            const specific_test = "qwqmel";
             const all = identifier;
             _ = &all;
             _ = &specific_test;
-            const test_match = std.mem.eql(u8, identifier, all);
+            const test_match = std.mem.eql(u8, identifier, specific_test);
             _ = &test_match;
             // const test_match_file = std.mem.eql(u8, "core.cashtokens.vmb_tests.json", test_file.filename);
             const test_match_file = std.mem.eql(u8, "core.signing-serialization.vmb_tests.json", test_file.filename);
@@ -509,25 +515,32 @@ test "vmbtests" {
                 try script_exec.computeSigningCache(&sigser_buff);
 
                 var program = try Program.init(ally, &script_exec);
+                const unlock_code = program.context.tx.inputs[program.context.input_index].script;
+                program.metrics.setScriptLimits(true, unlock_code.len);
 
                 verify_start = std.time.microTimestamp();
                 // _ = try evaluateProto(&program);
                 const res = VirtualMachine.verify(&program) catch |err| {
                     _ = &err;
-                    std.debug.print("ID {s}\n", .{identifier});
-                    std.debug.print("Failed verification  {any}\n", .{err});
+                    // std.debug.print("ID {s}\n", .{identifier});
+                    // std.debug.print("Failed verification  {any}\n", .{err});
                     failed_verifications += 1;
                     verification_count += 1;
                     continue;
                 };
                 if (!res) {
-                    std.debug.print("ID {s}\n", .{identifier});
-                    std.debug.print("Failed non truthy stack top item {any}\n", .{res});
+                    //     std.debug.print("ID {s}\n", .{identifier});
+                    //     std.debug.print("Failed non truthy stack top item {any}\n", .{res});
                     failed_verifications += 1;
                 }
+
+                // if (program.has_error) |err| {
+                //     std.debug.print("ID {s}\n", .{identifier});
+                //     std.debug.print("Contains error {any}\n", .{err});
+                // }
                 verify_end = std.time.microTimestamp();
                 if (res) {
-                    // std.debug.print("ID {s}\n", .{identifier});
+                    std.debug.print("ID {s}\n", .{identifier});
                     // std.debug.print("Testing {s}\nID {s}\n", .{ test_file.filename, identifier });
                     passed_count += 1;
                 }
@@ -536,22 +549,22 @@ test "vmbtests" {
                 // std.debug.print("Testing: {s}\n", .{
                 //     test_file.filename,
                 // });
-                // std.debug.print("Metrics\n" ++
-                //     "Sig checks: {}\n" ++
-                //     "Op Cost: {}\n" ++
-                //     "Hash iterations: {}\n" ++
-                //     "Is over cost limit: {}\n" ++
-                //     "Is Over Hash {}\n" ++
-                //     "Has Limits {}\n" ++
-                //     "Composite Op Cost: {}\n", .{
-                //     metrics.sig_checks,
-                //     metrics.op_cost,
-                //     metrics.hash_digest_iterations,
-                //     metrics.isOverOpCostLimit(SCRIPT_ENABLE_MAY2025 | SCRIPT_VM_LIMITS_STANDARD),
-                //     metrics.isOverHashItersLimit(),
-                //     metrics.hasValidScriptLimits(),
-                //     metrics.getCompositeOpCost(SCRIPT_ENABLE_MAY2025 | SCRIPT_VM_LIMITS_STANDARD),
-                // });
+                std.debug.print("Metrics\n" ++
+                    "Sig checks: {}\n" ++
+                    "Op Cost: {}\n" ++
+                    "Hash iterations: {}\n" ++
+                    "Is over cost limit: {}\n" ++
+                    "Is Over Hash {}\n" ++
+                    // "Has Limits {}\n" ++
+                    "Composite Op Cost: {}\n", .{
+                    program.metrics.sig_checks,
+                    program.metrics.op_cost,
+                    program.metrics.hash_digest_iterations,
+                    program.metrics.isOverOpCostLimit(true),
+                    program.metrics.isOverHashItersLimit(),
+                    // program.metrics.hasValidScriptLimits(),
+                    program.metrics.getCompositeOpCost(true),
+                });
                 // std.debug.print("Verify  {any}\n\n", .{res});
                 end_time = std.time.nanoTimestamp();
                 const verification_duration = verify_end - verify_start;

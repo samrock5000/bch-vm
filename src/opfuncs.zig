@@ -603,6 +603,7 @@ pub fn op_1negate(program: *Program) anyerror!void {
     const code = program.instruction_bytecode[program.instruction_pointer..];
     const push_value = try readPush(code, program.allocator);
     try program.stack.append(StackValue{ .bytes = push_value.data });
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_reserved(program: *Program) anyerror!void {
@@ -784,6 +785,7 @@ pub fn op_fromaltstack(program: *Program) anyerror!void {
         return error.read_empty_stack;
     }
     try program.stack.append(program.alt_stack.pop());
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_2drop(program: *Program) anyerror!void {
@@ -803,7 +805,9 @@ pub fn op_2dup(program: *Program) anyerror!void {
     const item1_copy = try program.allocator.dupe(u8, item1.bytes);
     const item2_copy = try program.allocator.dupe(u8, item2.bytes);
     try program.stack.append(StackValue{ .bytes = item1_copy });
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
     try program.stack.append(StackValue{ .bytes = item2_copy });
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
     // std.debug.print("OP_2DUP {any}\n", .{program.stack.get(program.stack.len - 1)});
 }
 
@@ -819,11 +823,11 @@ pub fn op_3dup(program: *Program) anyerror!void {
     const item2_copy = try program.allocator.dupe(u8, item2.bytes);
     const item3_copy = try program.allocator.dupe(u8, item3.bytes);
     try program.stack.append(StackValue{ .bytes = item1_copy });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
     try program.stack.append(StackValue{ .bytes = item2_copy });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
     try program.stack.append(StackValue{ .bytes = item3_copy });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_2over(program: *Program) anyerror!void {
@@ -835,9 +839,9 @@ pub fn op_2over(program: *Program) anyerror!void {
     const item1_copy = try program.allocator.dupe(u8, item1.bytes);
     const item2_copy = try program.allocator.dupe(u8, item2.bytes);
     try program.stack.append(StackValue{ .bytes = item1_copy });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
     try program.stack.append(StackValue{ .bytes = item2_copy });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_2rot(program: *Program) anyerror!void {
@@ -856,9 +860,9 @@ pub fn op_2rot(program: *Program) anyerror!void {
 
     // Append the copies at the end to complete rotation
     try program.stack.append(StackValue{ .bytes = item1_copy });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
     try program.stack.append(StackValue{ .bytes = item2_copy });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
     // if (!stateContinue(pc, program)) return;
 }
 
@@ -879,9 +883,9 @@ pub fn op_2swap(program: *Program) anyerror!void {
 
     // Append the copies to complete the swap
     try program.stack.append(StackValue{ .bytes = item1_copy });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
     try program.stack.append(StackValue{ .bytes = item2_copy });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_ifdup(program: *Program) anyerror!void {
@@ -892,7 +896,7 @@ pub fn op_ifdup(program: *Program) anyerror!void {
     const b = readScriptBool(top.bytes);
     if (b) {
         try program.stack.append(top);
-        // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+        // program.metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
     }
 }
 
@@ -901,7 +905,7 @@ pub fn op_depth(program: *Program) anyerror!void {
     var num = try BigInt.initSet(program.allocator, len);
     var minimally_encoded = try encodeScriptIntMininal(&num, program.allocator);
     try program.stack.append(StackValue{ .bytes = minimally_encoded[0..] });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_drop(program: *Program) anyerror!void {
@@ -918,7 +922,7 @@ pub fn op_dup(program: *Program) anyerror!void {
     const item1 = program.stack.get(program.stack.len - 1);
     const item1_copy = try program.allocator.dupe(u8, item1.bytes);
     try program.stack.append(StackValue{ .bytes = item1_copy });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_nip(program: *Program) anyerror!void {
@@ -934,7 +938,7 @@ pub fn op_over(program: *Program) anyerror!void {
     }
     _ = try program.stack.append(program.stack.get(program.stack.len - 2));
 
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_pick(program: *Program) anyerror!void {
@@ -953,7 +957,7 @@ pub fn op_pick(program: *Program) anyerror!void {
     const it = @as(i64, @intCast(program.stack.len)) - script_num - 1;
     const picked = program.stack.get(@as(usize, @intCast(it)));
     try program.stack.append(StackValue{ .bytes = picked.bytes });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_roll(program: *Program) anyerror!void {
@@ -972,7 +976,7 @@ pub fn op_roll(program: *Program) anyerror!void {
     const it = @as(i64, @intCast(program.stack.len)) - script_num - 1;
     const rolled = program.stack.orderedRemove(@intCast(it));
     try program.stack.append(StackValue{ .bytes = rolled.bytes });
-    // metrics.tallyOp(@intCast(script_num));
+    program.metrics.tallyOp(@intCast(script_num));
 }
 
 pub fn op_rot(program: *Program) anyerror!void {
@@ -1005,7 +1009,7 @@ pub fn op_tuck(program: *Program) anyerror!void {
         return error.read_empty_stack;
     }
     const top = program.stack.get(program.stack.len - 1);
-    // metrics.tallyPushOp(@intCast(top.bytes.len));
+    program.metrics.tallyPushOp(@intCast(top.bytes.len));
     try program.stack.insert(program.stack.len - 2, top);
 }
 
@@ -1030,7 +1034,7 @@ pub fn op_cat(program: *Program) anyerror!void {
     _ = program.stack.pop();
 
     try program.stack.append(StackValue{ .bytes = cat_buff });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_split(program: *Program) anyerror!void {
@@ -1052,7 +1056,7 @@ pub fn op_split(program: *Program) anyerror!void {
     program.stack.set(program.stack.len - 2, StackValue{ .bytes = range1 });
     program.stack.set(program.stack.len - 1, StackValue{ .bytes = range2 });
 
-    // metrics.tallyPushOp(@intCast(range1.len + range2.len));
+    program.metrics.tallyPushOp(@intCast(range1.len + range2.len));
 }
 
 pub fn op_num2bin(program: *Program) anyerror!void {
@@ -1105,7 +1109,8 @@ pub fn op_num2bin(program: *Program) anyerror!void {
 
     try list.append(signbit);
     program.stack.set(program.stack.len - 1, StackValue{ .bytes = list.items });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    // program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(raw_num.len));
 }
 
 pub fn op_bin2num(program: *Program) anyerror!void {
@@ -1119,7 +1124,7 @@ pub fn op_bin2num(program: *Program) anyerror!void {
     _ = program.stack.pop();
     try program.stack.append(StackValue{ .bytes = num });
 
-    // metrics.tallyPushOp(@intCast(number.bytes.len));
+    program.metrics.tallyPushOp(@intCast(number.bytes.len));
 }
 
 pub fn op_size(program: *Program) anyerror!void {
@@ -1131,7 +1136,7 @@ pub fn op_size(program: *Program) anyerror!void {
     var num = try BigInt.initSet(program.allocator, size);
     const minimally_encoded = try encodeScriptIntMininal(&num, program.allocator);
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_invert(program: *Program) anyerror!void {
@@ -1153,7 +1158,7 @@ pub fn op_and(program: *Program) anyerror!void {
     }
 
     _ = program.stack.pop();
-    // metrics.tallyOp(@intCast(item1.bytes.len));
+    program.metrics.tallyOp(@intCast(item1.bytes.len));
 }
 
 pub fn op_or(program: *Program) anyerror!void {
@@ -1169,7 +1174,7 @@ pub fn op_or(program: *Program) anyerror!void {
         item1.bytes[i] |= item2.bytes[i];
     }
     _ = program.stack.pop();
-    // metrics.tallyOp(@intCast(item1.bytes.len));
+    program.metrics.tallyOp(@intCast(item1.bytes.len));
 }
 
 pub fn op_xor(program: *Program) anyerror!void {
@@ -1185,7 +1190,7 @@ pub fn op_xor(program: *Program) anyerror!void {
         item1.bytes[i] ^= item2.bytes[i];
     }
     _ = program.stack.pop();
-    // metrics.tallyOp(@intCast(item1.bytes.len));
+    program.metrics.tallyOp(@intCast(item1.bytes.len));
 }
 
 pub fn op_equal(program: *Program) anyerror!void {
@@ -1210,7 +1215,7 @@ pub fn op_equal(program: *Program) anyerror!void {
         _ = program.stack.pop();
         try program.stack.append(StackValue{ .bytes = &.{} });
     }
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_equalverify(program: *Program) anyerror!void {
@@ -1261,6 +1266,7 @@ pub fn op_1sub(program: *Program) anyerror!void {
     if (program.stack.len < 1) {
         return error.read_empty_stack;
     }
+    const push_cost_factor = 2;
     const item = program.stack.get(program.stack.len - 1);
     var script_num = try readScriptInt(item.bytes, program.allocator);
     const one = try BigInt.initSet(program.allocator, 1);
@@ -1274,7 +1280,7 @@ pub fn op_1sub(program: *Program) anyerror!void {
     }
     const res = try program.allocator.dupe(u8, val);
     _ = try program.stack.append(StackValue{ .bytes = res });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_2mul(program: *Program) anyerror!void {
@@ -1291,6 +1297,7 @@ pub fn op_negate(program: *Program) anyerror!void {
     if (program.stack.len < 1) {
         return error.read_empty_stack;
     }
+    const push_cost_factor = 2;
     const item = program.stack.get(program.stack.len - 1);
     var script_num = try readScriptInt(item.bytes, program.allocator);
     script_num.negate();
@@ -1303,13 +1310,14 @@ pub fn op_negate(program: *Program) anyerror!void {
     }
     const res = try program.allocator.dupe(u8, val);
     _ = try program.stack.append(StackValue{ .bytes = res });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_abs(program: *Program) anyerror!void {
     if (program.stack.len < 1) {
         return error.read_empty_stack;
     }
+    const push_cost_factor = 2;
     const item = program.stack.get(program.stack.len - 1);
     var script_num = try readScriptInt(item.bytes, program.allocator);
     if (!script_num.isPositive()) {
@@ -1323,13 +1331,14 @@ pub fn op_abs(program: *Program) anyerror!void {
     }
     const res = try program.allocator.dupe(u8, val);
     _ = try program.stack.append(StackValue{ .bytes = res });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_not(program: *Program) anyerror!void {
     if (program.stack.len < 1) {
         return error.read_empty_stack;
     }
+    const push_cost_factor = 1;
     const item = program.stack.pop();
     var script_num = try readScriptInt(item.bytes, program.allocator);
     _ = try script_num.set(@intFromBool(script_num.eqlZero()));
@@ -1341,13 +1350,14 @@ pub fn op_not(program: *Program) anyerror!void {
     }
     const res = try program.allocator.dupe(u8, val);
     _ = try program.stack.append(StackValue{ .bytes = res });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_0notequal(program: *Program) anyerror!void {
     if (program.stack.len < 1) {
         return error.read_empty_stack;
     }
+    const push_cost_factor = 1;
     const item = program.stack.get(program.stack.len - 1);
     var script_num = try readScriptInt(item.bytes, program.allocator);
     _ = try script_num.set(@intFromBool(!script_num.eqlZero()));
@@ -1360,13 +1370,16 @@ pub fn op_0notequal(program: *Program) anyerror!void {
     }
     const res = try program.allocator.dupe(u8, val);
     _ = try program.stack.append(StackValue{ .bytes = res });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_add(program: *Program) anyerror!void {
     if (program.stack.len < 2) {
         return error.read_empty_stack;
     }
+    const quadratic_op_cost: u32 = 0;
+    const push_cost_factor: u32 = 2;
+
     const item_lhs = program.stack.get(program.stack.len - 2);
     const item_rhs = program.stack.get(program.stack.len - 1);
     var int_l = try readScriptInt(item_lhs.bytes, program.allocator);
@@ -1376,17 +1389,16 @@ pub fn op_add(program: *Program) anyerror!void {
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
-    // if (!stateContinue(pc + 1, program)) return;
-    // try @call(.always_tail, InstructionFuncs.lookup(@as(
-    //     Opcode,
-    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-    // )), .{ pc + 1, program });
+    program.metrics.tallyOp(quadratic_op_cost);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_sub(program: *Program) anyerror!void {
     if (program.stack.len < 2) {
         return error.read_empty_stack;
     }
+    const quadratic_op_cost: u32 = 0;
+    const push_cost_factor: u32 = 2;
 
     const item_lhs = program.stack.get(program.stack.len - 2);
     const item_rhs = program.stack.get(program.stack.len - 1);
@@ -1400,8 +1412,8 @@ pub fn op_sub(program: *Program) anyerror!void {
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
     if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
-    // metrics.tallyOp(quadratic_op_cost);
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyOp(quadratic_op_cost);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_mul(program: *Program) anyerror!void {
@@ -1409,7 +1421,7 @@ pub fn op_mul(program: *Program) anyerror!void {
         return error.read_empty_stack;
     }
     // var quadratic_op_cost: u32 = 0;
-    // var push_cost_factor: u32 = 1;
+    const push_cost_factor: u32 = 2;
 
     const item_lhs = program.stack.get(program.stack.len - 2);
     const item_rhs = program.stack.get(program.stack.len - 1);
@@ -1417,15 +1429,14 @@ pub fn op_mul(program: *Program) anyerror!void {
     var int_l = try readScriptInt(item_lhs.bytes, program.allocator);
     var int_r = try readScriptInt(item_rhs.bytes, program.allocator);
     try int_l.mul(&int_l, &int_r);
-    // quadratic_op_cost = @intCast(item_lhs.bytes.len * item_rhs.bytes.len);
-    // push_cost_factor = 2;
+    const quadratic_op_cost: u32 = @intCast(item_lhs.bytes.len * item_rhs.bytes.len);
     _ = program.stack.pop();
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
     if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
-    // metrics.tallyOp(quadratic_op_cost);
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyOp(quadratic_op_cost);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_div(program: *Program) anyerror!void {
@@ -1451,15 +1462,15 @@ pub fn op_div(program: *Program) anyerror!void {
     }
     _ = try BigInt.divTrunc(&q, &r, &int_l, &int_r);
     int_l.swap(&q);
-    // quadratic_op_cost = @intCast(item_lhs.bytes.len * item_rhs.bytes.len);
-    // push_cost_factor = 2;
+    const quadratic_op_cost: u32 = @intCast(item_lhs.bytes.len * item_rhs.bytes.len);
+    const push_cost_factor: u32 = 2;
     _ = program.stack.pop();
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
     if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
-    // metrics.tallyOp(quadratic_op_cost);
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyOp(quadratic_op_cost);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_mod(program: *Program) anyerror!void {
@@ -1485,15 +1496,15 @@ pub fn op_mod(program: *Program) anyerror!void {
     }
     _ = try BigInt.divTrunc(&q, &r, &int_l, &int_r);
     int_l.swap(&r);
-    // quadratic_op_cost = @intCast(item_lhs.bytes.len * item_rhs.bytes.len);
-    // push_cost_factor = 2;
+    const quadratic_op_cost: u32 = @intCast(item_lhs.bytes.len * item_rhs.bytes.len);
+    const push_cost_factor: u32 = 2;
     _ = program.stack.pop();
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
     if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
-    // metrics.tallyOp(quadratic_op_cost);
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyOp(quadratic_op_cost);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_lshift(program: *Program) anyerror!void {
@@ -1512,8 +1523,8 @@ pub fn op_booland(program: *Program) anyerror!void {
     if (program.stack.len < 2) {
         return error.read_empty_stack;
     }
-    // var quadratic_op_cost: u32 = 0;
-    // var push_cost_factor: u32 = 1;
+    const quadratic_op_cost: u32 = 0;
+    const push_cost_factor: u32 = 1;
 
     const item_lhs = program.stack.get(program.stack.len - 2);
     const item_rhs = program.stack.get(program.stack.len - 1);
@@ -1522,23 +1533,21 @@ pub fn op_booland(program: *Program) anyerror!void {
     var int_r = try readScriptInt(item_rhs.bytes, program.allocator);
     const op_res = !int_l.eqlZero() and !int_r.eqlZero();
     try int_l.set(@intFromBool(op_res));
-    // quadratic_op_cost = @intCast(item_lhs.bytes.len * item_rhs.bytes.len);
-    // push_cost_factor = 2;
     _ = program.stack.pop();
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
     if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
-    // metrics.tallyOp(quadratic_op_cost);
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyOp(quadratic_op_cost);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_boolor(program: *Program) anyerror!void {
     if (program.stack.len < 2) {
         return error.read_empty_stack;
     }
-    // var quadratic_op_cost: u32 = 0;
-    // var push_cost_factor: u32 = 1;
+    const quadratic_op_cost: u32 = 0;
+    const push_cost_factor: u32 = 1;
 
     const item_lhs = program.stack.get(program.stack.len - 2);
     const item_rhs = program.stack.get(program.stack.len - 1);
@@ -1554,16 +1563,16 @@ pub fn op_boolor(program: *Program) anyerror!void {
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
     if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
-    // metrics.tallyOp(quadratic_op_cost);
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyOp(quadratic_op_cost);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_numequal(program: *Program) anyerror!void {
     if (program.stack.len < 2) {
         return error.read_empty_stack;
     }
-    // var quadratic_op_cost: u32 = 0;
-    // var push_cost_factor: u32 = 1;
+    const quadratic_op_cost: u32 = 0;
+    const push_cost_factor: u32 = 1;
 
     const item_lhs = program.stack.get(program.stack.len - 2);
     const item_rhs = program.stack.get(program.stack.len - 1);
@@ -1579,16 +1588,16 @@ pub fn op_numequal(program: *Program) anyerror!void {
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
     if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
-    // metrics.tallyOp(quadratic_op_cost);
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyOp(quadratic_op_cost);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_numequalverify(program: *Program) anyerror!void {
     if (program.stack.len < 2) {
         return error.read_empty_stack;
     }
-    // var quadratic_op_cost: u32 = 0;
-    // var push_cost_factor: u32 = 1;
+    const quadratic_op_cost: u32 = 0;
+    const push_cost_factor: u32 = 1;
 
     const item_lhs = program.stack.get(program.stack.len - 2);
     const item_rhs = program.stack.get(program.stack.len - 1);
@@ -1604,16 +1613,16 @@ pub fn op_numequalverify(program: *Program) anyerror!void {
     // push_cost_factor = 2;
     _ = program.stack.pop();
     _ = program.stack.pop();
-    // metrics.tallyOp(quadratic_op_cost);
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyOp(quadratic_op_cost);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_numnotequal(program: *Program) anyerror!void {
     if (program.stack.len < 2) {
         return error.read_empty_stack;
     }
-    // var quadratic_op_cost: u32 = 0;
-    // var push_cost_factor: u32 = 1;
+    const quadratic_op_cost: u32 = 0;
+    const push_cost_factor: u32 = 1;
 
     const item_lhs = program.stack.get(program.stack.len - 2);
     const item_rhs = program.stack.get(program.stack.len - 1);
@@ -1629,16 +1638,16 @@ pub fn op_numnotequal(program: *Program) anyerror!void {
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
     if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
-    // metrics.tallyOp(quadratic_op_cost);
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyOp(quadratic_op_cost);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_lessthan(program: *Program) anyerror!void {
     if (program.stack.len < 2) {
         return error.read_empty_stack;
     }
-    // var quadratic_op_cost: u32 = 0;
-    // var push_cost_factor: u32 = 1;
+    const quadratic_op_cost: u32 = 0;
+    const push_cost_factor: u32 = 1;
 
     const item_lhs = program.stack.get(program.stack.len - 2);
     const item_rhs = program.stack.get(program.stack.len - 1);
@@ -1654,16 +1663,16 @@ pub fn op_lessthan(program: *Program) anyerror!void {
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
     if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
-    // metrics.tallyOp(quadratic_op_cost);
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyOp(quadratic_op_cost);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_greaterthan(program: *Program) anyerror!void {
     if (program.stack.len < 2) {
         return error.read_empty_stack;
     }
-    // var quadratic_op_cost: u32 = 0;
-    // var push_cost_factor: u32 = 1;
+    const quadratic_op_cost: u32 = 0;
+    const push_cost_factor: u32 = 1;
 
     const item_lhs = program.stack.get(program.stack.len - 2);
     const item_rhs = program.stack.get(program.stack.len - 1);
@@ -1679,16 +1688,16 @@ pub fn op_greaterthan(program: *Program) anyerror!void {
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
     if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
-    // metrics.tallyOp(quadratic_op_cost);
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyOp(quadratic_op_cost);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_lessthanorequal(program: *Program) anyerror!void {
     if (program.stack.len < 2) {
         return error.read_empty_stack;
     }
-    // var quadratic_op_cost: u32 = 0;
-    // var push_cost_factor: u32 = 1;
+    const quadratic_op_cost: u32 = 0;
+    const push_cost_factor: u32 = 1;
 
     const item_lhs = program.stack.get(program.stack.len - 2);
     const item_rhs = program.stack.get(program.stack.len - 1);
@@ -1704,8 +1713,8 @@ pub fn op_lessthanorequal(program: *Program) anyerror!void {
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
     if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
-    // metrics.tallyOp(quadratic_op_cost);
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyOp(quadratic_op_cost);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
     // if (!stateContinue(pc, program)) return;
     // try @call(.always_tail, InstructionFuncs.lookup(@as(
     //     Opcode,
@@ -1717,8 +1726,8 @@ pub fn op_greaterthanorequal(program: *Program) anyerror!void {
     if (program.stack.len < 2) {
         return error.read_empty_stack;
     }
-    // var quadratic_op_cost: u32 = 0;
-    // var push_cost_factor: u32 = 1;
+    const quadratic_op_cost: u32 = 0;
+    const push_cost_factor: u32 = 1;
 
     const item_lhs = program.stack.get(program.stack.len - 2);
     const item_rhs = program.stack.get(program.stack.len - 1);
@@ -1734,16 +1743,16 @@ pub fn op_greaterthanorequal(program: *Program) anyerror!void {
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
     if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
-    // metrics.tallyOp(quadratic_op_cost);
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyOp(quadratic_op_cost);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_min(program: *Program) anyerror!void {
     if (program.stack.len < 2) {
         return error.read_empty_stack;
     }
-    // var quadratic_op_cost: u32 = 0;
-    // var push_cost_factor: u32 = 1;
+    const quadratic_op_cost: u32 = 0;
+    const push_cost_factor: u32 = 2;
 
     const item_lhs = program.stack.get(program.stack.len - 2);
     const item_rhs = program.stack.get(program.stack.len - 1);
@@ -1759,16 +1768,16 @@ pub fn op_min(program: *Program) anyerror!void {
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
     if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
-    // metrics.tallyOp(quadratic_op_cost);
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyOp(quadratic_op_cost);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_max(program: *Program) anyerror!void {
     if (program.stack.len < 2) {
         return error.read_empty_stack;
     }
-    // var quadratic_op_cost: u32 = 0;
-    // var push_cost_factor: u32 = 1;
+    const quadratic_op_cost: u32 = 0;
+    const push_cost_factor: u32 = 2;
 
     const item_lhs = program.stack.get(program.stack.len - 2);
     const item_rhs = program.stack.get(program.stack.len - 1);
@@ -1784,8 +1793,8 @@ pub fn op_max(program: *Program) anyerror!void {
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
     if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
-    // metrics.tallyOp(quadratic_op_cost);
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len * push_cost_factor));
+    program.metrics.tallyOp(quadratic_op_cost);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_within(program: *Program) anyerror!void {
@@ -1809,7 +1818,7 @@ pub fn op_within(program: *Program) anyerror!void {
         try program.stack.append(StackValue{ .bytes = &.{} });
     }
 
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_ripemd160(program: *Program) anyerror!void {
@@ -1818,13 +1827,13 @@ pub fn op_ripemd160(program: *Program) anyerror!void {
     }
     const item = program.stack.pop();
     var buff = try program.allocator.alloc(u8, 32);
-    // var is_two_rounds = false;
+    const is_two_rounds = false;
     var hash_len: usize = 0;
     hash_len = 20;
     ripemd160.Ripemd160.hash(item.bytes, buff[0..20], .{});
     try program.stack.append(StackValue{ .bytes = buff[0..hash_len] });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
-    // metrics.tallyHashOp(@intCast(item.bytes.len), is_two_rounds);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
+    program.metrics.tallyHashOp(@intCast(item.bytes.len), is_two_rounds);
 }
 
 pub fn op_sha1(program: *Program) anyerror!void {
@@ -1833,13 +1842,13 @@ pub fn op_sha1(program: *Program) anyerror!void {
     }
     const item = program.stack.pop();
     var buff = try program.allocator.alloc(u8, 32);
-    // var is_two_rounds = false;
+    const is_two_rounds = false;
     var hash_len: usize = 0;
     hash_len = 20;
     std.crypto.hash.Sha1.hash(item.bytes, buff[0..20], .{});
     try program.stack.append(StackValue{ .bytes = buff[0..hash_len] });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
-    // metrics.tallyHashOp(@intCast(item.bytes.len), is_two_rounds);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
+    program.metrics.tallyHashOp(@intCast(item.bytes.len), is_two_rounds);
 }
 
 pub fn op_sha256(program: *Program) anyerror!void {
@@ -1848,13 +1857,13 @@ pub fn op_sha256(program: *Program) anyerror!void {
     }
     const item = program.stack.pop();
     var buff = try program.allocator.alloc(u8, 32);
-    // var is_two_rounds = false;
+    const is_two_rounds = false;
     var hash_len: usize = 0;
     hash_len = 32;
     std.crypto.hash.sha2.Sha256.hash(item.bytes, buff[0..32], .{});
     try program.stack.append(StackValue{ .bytes = buff[0..hash_len] });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
-    // metrics.tallyHashOp(@intCast(item.bytes.len), is_two_rounds);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
+    program.metrics.tallyHashOp(@intCast(item.bytes.len), is_two_rounds);
 }
 
 pub fn op_hash160(program: *Program) anyerror!void {
@@ -1863,14 +1872,14 @@ pub fn op_hash160(program: *Program) anyerror!void {
     }
     const item = program.stack.pop();
     var buff = try program.allocator.alloc(u8, 32);
-    // var is_two_rounds = false;
+    const is_two_rounds = true;
     var hash_len: usize = 0;
     hash_len = 20;
     std.crypto.hash.sha2.Sha256.hash(item.bytes, buff[0..32], .{});
     ripemd160.Ripemd160.hash(buff[0..32], buff[0..20], .{});
     try program.stack.append(StackValue{ .bytes = buff[0..hash_len] });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
-    // metrics.tallyHashOp(@intCast(item.bytes.len), is_two_rounds);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
+    program.metrics.tallyHashOp(@intCast(item.bytes.len), is_two_rounds);
 }
 
 pub fn op_hash256(program: *Program) anyerror!void {
@@ -1879,14 +1888,14 @@ pub fn op_hash256(program: *Program) anyerror!void {
     }
     const item = program.stack.pop();
     var buff = try program.allocator.alloc(u8, 32);
-    // var is_two_rounds = false;
+    const is_two_rounds = true;
     var hash_len: usize = 0;
     hash_len = 32;
     std.crypto.hash.sha2.Sha256.hash(item.bytes, buff[0..32], .{});
     std.crypto.hash.sha2.Sha256.hash(buff[0..32], buff[0..32], .{});
     try program.stack.append(StackValue{ .bytes = buff[0..hash_len] });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
-    // metrics.tallyHashOp(@intCast(item.bytes.len), is_two_rounds);
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
+    program.metrics.tallyHashOp(@intCast(item.bytes.len), is_two_rounds);
 }
 pub fn op_codeseparator(program: *Program) anyerror!void {
     program.code_seperator = program.instruction_pointer + 1;
@@ -1912,9 +1921,9 @@ pub fn op_checksig(program: *Program) anyerror!void {
         program.allocator,
     );
     // std.debug.print("VALID SIG {any}\n", .{is_valid_sig});
-    // metrics.tallySigChecks(1);
+    program.metrics.tallySigChecks(1);
     // if (bytes_hashed > 0) {
-    //     metrics.tallyHashOp(@intCast(bytes_hashed), true);
+    program.metrics.tallyHashOp(@intCast(bytes_hashed), true);
     // }
 
     _ = program.stack.pop();
@@ -1931,7 +1940,7 @@ pub fn op_checksig(program: *Program) anyerror!void {
     //         return ErrorSet.verify;
     //     }
     // }
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
     // if (!stateContinue(pc, program)) return;
     // try @call(.always_tail, InstructionFuncs.lookup(@as(
     //     Opcode,
@@ -1957,9 +1966,9 @@ pub fn op_checksigverify(program: *Program) anyerror!void {
         program.allocator,
     );
     // std.debug.print("VALID SIG {any}\n", .{is_valid_sig});
-    // metrics.tallySigChecks(1);
+    program.metrics.tallySigChecks(1);
     // if (bytes_hashed > 0) {
-    //     metrics.tallyHashOp(@intCast(bytes_hashed), true);
+    program.metrics.tallyHashOp(@intCast(bytes_hashed), true);
     // }
 
     if (!is_valid_sig) {
@@ -1967,21 +1976,6 @@ pub fn op_checksigverify(program: *Program) anyerror!void {
     }
     _ = program.stack.pop();
     _ = program.stack.pop();
-
-    // const val = &[_]u8{@intCast(@intFromBool(is_valid_sig))};
-    // const res = try program.allocator.dupe(u8, val);
-    // try program.stack.append(StackValue{ .bytes = res });
-
-    // if (@as(Opcode, @enumFromInt(code[ip])) == .op_checksigverify) {
-    //     //     std.debug.print("op_checksigverify {any}\n", .{is_valid_sig});
-    //     _ = stack.pop();
-    // }
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
-    // if (!stateContinue(pc, program)) return;
-    // try @call(.always_tail, InstructionFuncs.lookup(@as(
-    //     Opcode,
-    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-    // )), .{ pc + 1, program });
 }
 
 pub fn op_checkmultisig(program: *Program) anyerror!void {
@@ -2069,12 +2063,12 @@ pub fn op_checkmultisig(program: *Program) anyerror!void {
             if (tmp_bytes_hashed > bytes_hashed) {
                 bytes_hashed = tmp_bytes_hashed;
             }
-            // metrics.tallySigChecks(1);
+            // program.metrics.tallySigChecks(1);
             i_key += 1;
         }
 
         if (bytes_hashed > 0) {
-            // metrics.tallyHashOp(@intCast(bytes_hashed), true);
+            // program.metrics.tallyHashOp(@intCast(bytes_hashed), true);
         }
         if ((checkbits >> i_key) != 0) {
             return error.invalid_bit_count;
@@ -2124,21 +2118,30 @@ pub fn op_checkmultisig(program: *Program) anyerror!void {
             }
         }
         if (!all_signatures_null) {
-            // metrics.tallySigChecks(@intCast(num_pubkeys));
+            // program.metrics.tallySigChecks(@intCast(num_pubkeys));
             if (bytes_hashed > 0) {
-                // metrics.tallyHashOp(@intCast(bytes_hashed), true);
+                // program.metrics.tallyHashOp(@intCast(bytes_hashed), true);
             }
         }
     }
     for (0..index_dummy) |_| {
         _ = program.stack.pop();
     }
-    const val = &[_]u8{@intCast(@intFromBool(success))};
-    const res = try program.allocator.dupe(u8, val);
-    try program.stack.append(StackValue{ .bytes = res });
+    // const val = &[_]u8{@intCast(@intFromBool(success))};
+    // const res = try program.allocator.dupe(u8, val);
+    // try program.stack.append(StackValue{ .bytes = res });
+    if (success) {
+        const val = &[_]u8{1};
+        const res = try program.allocator.dupe(u8, val);
+        try program.stack.append(StackValue{ .bytes = res });
+    } else {
+        const empty = &[_]u8{};
+        // const res = try program.allocator.dupe(u8, empty);
+        try program.stack.append(StackValue{ .bytes = empty });
+    }
     // std.debug.print("CHECK MULTI SIG RES {any}\n", .{success});
 
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_checkmultisigverify(program: *Program) anyerror!void {
@@ -2146,7 +2149,6 @@ pub fn op_checkmultisigverify(program: *Program) anyerror!void {
     const top = program.stack.get(program.stack.len - 1);
     const res = readScriptBool(top.bytes);
     if (!res) return error.verify else _ = program.stack.pop();
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
 }
 
 pub fn op_nop1(program: *Program) anyerror!void {
@@ -2165,11 +2167,6 @@ pub fn op_checklocktimeverify(program: *Program) anyerror!void {
     if (!checkLockTime(lock_time_num, program.context)) {
         return error.read_empty_stack;
     }
-    // if (!stateContinue(pc, program)) return;
-    // try @call(.always_tail, InstructionFuncs.lookup(@as(
-    //     Opcode,
-    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-    // )), .{ pc + 1, program });
 }
 
 pub fn op_checksequenceverify(program: *Program) anyerror!void {
@@ -2187,74 +2184,34 @@ pub fn op_checksequenceverify(program: *Program) anyerror!void {
     if (!checkSequence(sequence_num, program.context.*)) {
         return error.unsatisfied_locktime;
     }
-    // if (!stateContinue(pc, program)) return;
-    // try @call(.always_tail, InstructionFuncs.lookup(@as(
-    //     Opcode,
-    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-    // )), .{ pc + 1, program });
 }
 
 pub fn op_nop4(program: *Program) anyerror!void {
     _ = &program;
-    // if (!stateContinue(pc, program)) return;
-    // try @call(.always_tail, InstructionFuncs.lookup(@as(
-    //     Opcode,
-    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-    // )), .{ pc + 1, program });
 }
 
 pub fn op_nop5(program: *Program) anyerror!void {
     _ = &program;
-    // if (!stateContinue(pc, program)) return;
-    // try @call(.always_tail, InstructionFuncs.lookup(@as(
-    //     Opcode,
-    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-    // )), .{ pc + 1, program });
 }
 
 pub fn op_nop6(program: *Program) anyerror!void {
     _ = &program;
-    // if (!stateContinue(pc, program)) return;
-    // try @call(.always_tail, InstructionFuncs.lookup(@as(
-    //     Opcode,
-    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-    // )), .{ pc + 1, program });
 }
 
 pub fn op_nop7(program: *Program) anyerror!void {
     _ = &program;
-    // if (!stateContinue(pc, program)) return;
-    // try @call(.always_tail, InstructionFuncs.lookup(@as(
-    //     Opcode,
-    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-    // )), .{ pc + 1, program });
 }
 
 pub fn op_nop8(program: *Program) anyerror!void {
     _ = &program;
-    // if (!stateContinue(pc, program)) return;
-    // try @call(.always_tail, InstructionFuncs.lookup(@as(
-    //     Opcode,
-    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-    // )), .{ pc + 1, program });
 }
 
 pub fn op_nop9(program: *Program) anyerror!void {
     _ = &program;
-    // if (!stateContinue(pc, program)) return;
-    // try @call(.always_tail, InstructionFuncs.lookup(@as(
-    //     Opcode,
-    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-    // )), .{ pc + 1, program });
 }
 
 pub fn op_nop10(program: *Program) anyerror!void {
     _ = &program;
-    // if (!stateContinue(pc, program)) return;
-    // try @call(.always_tail, InstructionFuncs.lookup(@as(
-    //     Opcode,
-    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-    // )), .{ pc + 1, program });
 }
 
 pub fn op_checkdatasig(program: *Program) anyerror!void {
@@ -2275,8 +2232,8 @@ pub fn op_checkdatasig(program: *Program) anyerror!void {
             publickey.bytes,
             program.allocator,
         );
-        // metrics.tallySigChecks(1);
-        // metrics.tallyHashOp(@intCast(message.bytes.len), true);
+        program.metrics.tallySigChecks(1);
+        program.metrics.tallyHashOp(@intCast(message.bytes.len), true);
     }
 
     _ = program.stack.pop();
@@ -2287,7 +2244,7 @@ pub fn op_checkdatasig(program: *Program) anyerror!void {
     const res = try program.allocator.dupe(u8, val);
     try program.stack.append(StackValue{ .bytes = res });
 
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_checkdatasigverify(program: *Program) anyerror!void {
@@ -2308,25 +2265,17 @@ pub fn op_checkdatasigverify(program: *Program) anyerror!void {
             publickey.bytes,
             program.allocator,
         );
-        // metrics.tallySigChecks(1);
-        // metrics.tallyHashOp(@intCast(message.bytes.len), true);
+        program.metrics.tallySigChecks(1);
+        program.metrics.tallyHashOp(@intCast(message.bytes.len), true);
     }
 
     _ = program.stack.pop();
     _ = program.stack.pop();
     _ = program.stack.pop();
 
-    // const val = &[_]u8{@intCast(@intFromBool(success))};
-    // const res = try program.allocator.dupe(u8, val);
-    // _ = program.stack.pop();
     if (!success) {
         return error.op_checkdatasigverify;
     }
-    // if (!stateContinue(pc, program)) return;
-    // try @call(.always_tail, InstructionFuncs.lookup(@as(
-    //     Opcode,
-    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-    // )), .{ pc + 1, program });
 }
 
 pub fn op_reversebytes(program: *Program) anyerror!void {
@@ -2338,7 +2287,7 @@ pub fn op_reversebytes(program: *Program) anyerror!void {
     _ = std.mem.reverse(u8, stack_top.bytes);
 
     program.stack.set(program.stack.len - 1, StackValue{ .bytes = stack_top.bytes });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_unknown189(program: *Program) anyerror!void {
@@ -2360,7 +2309,7 @@ pub fn op_inputindex(program: *Program) anyerror!void {
     var index = try BigInt.initSet(program.allocator, program.context.input_index);
     const num = try encodeScriptIntMininal(&index, program.allocator);
     try program.stack.append(StackValue{ .bytes = num });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_activebytecode(program: *Program) anyerror!void {
@@ -2368,7 +2317,7 @@ pub fn op_activebytecode(program: *Program) anyerror!void {
     const copy = try program.allocator.dupe(u8, code);
     try program.stack.append(StackValue{ .bytes = copy });
 
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_txversion(program: *Program) anyerror!void {
@@ -2379,7 +2328,7 @@ pub fn op_txversion(program: *Program) anyerror!void {
         program.allocator,
     );
     try program.stack.append(StackValue{ .bytes = num });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_txinputcount(program: *Program) anyerror!void {
@@ -2387,7 +2336,7 @@ pub fn op_txinputcount(program: *Program) anyerror!void {
     var count = try BigInt.initSet(program.allocator, input_count);
     const num = try encodeScriptIntMininal(&count, program.allocator);
     try program.stack.append(StackValue{ .bytes = num });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_txoutputcount(program: *Program) anyerror!void {
@@ -2395,7 +2344,7 @@ pub fn op_txoutputcount(program: *Program) anyerror!void {
     var count = try BigInt.initSet(program.allocator, output_count);
     const num = try encodeScriptIntMininal(&count, program.allocator);
     try program.stack.append(StackValue{ .bytes = num });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_txlocktime(program: *Program) anyerror!void {
@@ -2403,7 +2352,7 @@ pub fn op_txlocktime(program: *Program) anyerror!void {
     var lock_time = try BigInt.initSet(program.allocator, lockime);
     const num = try encodeScriptIntMininal(&lock_time, program.allocator);
     try program.stack.append(StackValue{ .bytes = num });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_utxovalue(program: *Program) anyerror!void {
@@ -2431,7 +2380,7 @@ pub fn op_utxovalue(program: *Program) anyerror!void {
     var utxo_value_bytes = try BigInt.initSet(program.allocator, utxo_value);
     const num = try encodeScriptIntMininal(&utxo_value_bytes, program.allocator);
     try program.stack.append(StackValue{ .bytes = num });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_utxobytecode(program: *Program) anyerror!void {
@@ -2454,7 +2403,7 @@ pub fn op_utxobytecode(program: *Program) anyerror!void {
     const utxo_script = program.context.utxo[@intCast(index)].script;
     const utxo_bytecode = try bytecode.allocator.dupe(u8, utxo_script);
     try program.stack.append(StackValue{ .bytes = utxo_bytecode });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_outpointtxhash(program: *Program) anyerror!void {
@@ -2478,7 +2427,7 @@ pub fn op_outpointtxhash(program: *Program) anyerror!void {
     try bytecode.writer().writeInt(u256, outpoint_txid, .big);
     const outpoint_txid_bytecode = try bytecode.allocator.dupe(u8, bytecode.items);
     try program.stack.append(StackValue{ .bytes = outpoint_txid_bytecode });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_outpointindex(program: *Program) anyerror!void {
@@ -2502,7 +2451,7 @@ pub fn op_outpointindex(program: *Program) anyerror!void {
     var outpoint_index_bytes = try BigInt.initSet(program.allocator, outpoint_index);
     const num = try encodeScriptIntMininal(&outpoint_index_bytes, program.allocator);
     try program.stack.append(StackValue{ .bytes = num });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_inputbytecode(program: *Program) anyerror!void {
@@ -2525,7 +2474,7 @@ pub fn op_inputbytecode(program: *Program) anyerror!void {
     const input_script = program.context.tx.inputs[@intCast(index)].script;
     const input_bytecode = try bytecode.allocator.dupe(u8, input_script);
     try program.stack.append(StackValue{ .bytes = input_bytecode });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_inputsequencenumber(program: *Program) anyerror!void {
@@ -2549,7 +2498,7 @@ pub fn op_inputsequencenumber(program: *Program) anyerror!void {
     var input_sequence_bytes = try BigInt.initSet(program.allocator, input_sequence);
     const num = try encodeScriptIntMininal(&input_sequence_bytes, program.allocator);
     try program.stack.append(StackValue{ .bytes = num });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_outputvalue(program: *Program) anyerror!void {
@@ -2573,7 +2522,7 @@ pub fn op_outputvalue(program: *Program) anyerror!void {
     var output_value_bytes = try BigInt.initSet(program.allocator, output_value);
     const num = try encodeScriptIntMininal(&output_value_bytes, program.allocator);
     try program.stack.append(StackValue{ .bytes = num });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_outputbytecode(program: *Program) anyerror!void {
@@ -2595,7 +2544,7 @@ pub fn op_outputbytecode(program: *Program) anyerror!void {
     const txo_bytecode = try bytecode.allocator.dupe(u8, output_script);
     try program.stack.append(StackValue{ .bytes = txo_bytecode });
 
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_utxotokencategory(program: *Program) anyerror!void {
@@ -2624,7 +2573,7 @@ pub fn op_utxotokencategory(program: *Program) anyerror!void {
     }
     const cat_id = try bytecode.allocator.dupe(u8, bytecode.items);
     try program.stack.append(StackValue{ .bytes = cat_id });
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_utxotokencommitment(program: *Program) anyerror!void {
@@ -2655,7 +2604,7 @@ pub fn op_utxotokencommitment(program: *Program) anyerror!void {
         try program.stack.append(StackValue{ .bytes = capability });
     }
     bytecode.clearAndFree();
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_utxotokenamount(program: *Program) anyerror!void {
@@ -2684,7 +2633,7 @@ pub fn op_utxotokenamount(program: *Program) anyerror!void {
     const amount = try bytecode.allocator.dupe(u8, bytecode.items);
     try program.stack.append(StackValue{ .bytes = amount });
     bytecode.clearAndFree();
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_outputtokencategory(program: *Program) anyerror!void {
@@ -2716,7 +2665,7 @@ pub fn op_outputtokencategory(program: *Program) anyerror!void {
     try program.stack.append(StackValue{ .bytes = cat_id });
 
     bytecode.clearAndFree();
-    // metrics.tallyPushOp(@intCast(stack.get(stack.len - 1).bytes.len));
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_outputtokencommitment(program: *Program) anyerror!void {
@@ -2747,6 +2696,7 @@ pub fn op_outputtokencommitment(program: *Program) anyerror!void {
         try program.stack.append(StackValue{ .bytes = capability });
     }
     bytecode.clearAndFree();
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_outputtokenamount(program: *Program) anyerror!void {
@@ -2775,6 +2725,7 @@ pub fn op_outputtokenamount(program: *Program) anyerror!void {
     const amount = try bytecode.allocator.dupe(u8, bytecode.items);
     try program.stack.append(StackValue{ .bytes = amount });
     bytecode.clearAndFree();
+    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
 pub fn op_unknown212(program: *Program) anyerror!void {

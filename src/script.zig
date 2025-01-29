@@ -43,7 +43,7 @@ pub fn isP2SH(script: []const u8) bool {
     return false;
 }
 pub fn readScriptInt(data: []u8, gpa: std.mem.Allocator) !BigInt {
-    // std.debug.print("READ SCRIPT INT {any}\n",.{data.len} );
+    // std.debug.print("READ SCRIPT INT {any}\n", .{data.len});
     var zero = try BigInt.initSet(gpa, 0);
     defer zero.deinit();
 
