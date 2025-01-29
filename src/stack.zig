@@ -13,7 +13,7 @@ const verifyTransactionTokens = @import("token.zig").verifyTransactionTokens;
 const totalOutputValue = @import("transaction.zig").totalOutputValue;
 const Token = @import("token.zig");
 const Script = @import("script.zig");
-const SigningContextCache = @import("sigser.zig").SigningContextCache;
+const SigningCache = @import("sigser.zig").SigningCache;
 const Metrics = @import("metrics.zig").ScriptExecutionMetrics;
 const May2025 = @import("vm_limits.zig").May2025;
 const VerifyError = @import("error.zig").VerifyError;
@@ -31,13 +31,13 @@ pub const ScriptExecContext = struct {
     input_index: u32,
     utxo: []Transaction.Output,
     tx: Transaction,
-    signing_cache: SigningContextCache,
+    signing_cache: SigningCache,
     pub fn init() ScriptExecContext {
         return ScriptExecContext{
             .input_index = 0,
             .utxo = &[_]Transaction.Output{},
             .tx = Transaction.init(),
-            .signing_cache = SigningContextCache.init(),
+            .signing_cache = SigningCache.init(),
         };
     }
     pub fn computeSigningCache(self: *ScriptExecContext, buf: []u8) !void {
@@ -52,7 +52,7 @@ pub const Program = struct {
     instruction_pointer: usize,
     code_seperator: usize,
     allocator: Allocator,
-    control_stack: ConstrolStack,
+    control_stack: ControlStack,
     metrics: Metrics,
     context: *ScriptExecContext,
     // has_error: ?anyerror!void,
@@ -63,7 +63,7 @@ pub const Program = struct {
         return Program{
             .stack = try std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length).init(0),
             .alt_stack = try std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length).init(0),
-            .control_stack = ConstrolStack.init(),
+            .control_stack = ControlStack.init(),
             .instruction_bytecode = undefined,
             .instruction_pointer = 0,
             .code_seperator = 0,
@@ -82,7 +82,6 @@ pub const VirtualMachine = struct {
         try @call(.auto, VirtualMachine.opcodeLookup(operation), .{program});
     }
     fn opcodeLookup(op: Opcode) Instruction {
-        // std.debug.print("OP {any}\n", .{op});
         return opcodeToFuncTable[@intFromEnum(op)];
     }
     fn getCodepoint(program: *Program) u8 {
@@ -171,35 +170,36 @@ pub const VirtualMachine = struct {
         if (!hasMoreInstructions(p)) return;
 
         const operation = getOperation(p);
-        const execution_state = p.control_stack.allTrue();
-        var const_stack = p.control_stack;
+        var control_stack = p.control_stack;
+        const execution_state = control_stack.allTrue();
 
         // Skip disabled opcodes
         if (operation.isDisabled()) {
             return StackError.disabled_opcode;
         }
+        // std.debug.print("OP {any}\n", .{operation});
+        // std.debug.print("CondStack size {}\n" ++
+        //     "empty {}\n" ++ "All true {}\n\n", .{
+        //     control_stack.size,
+        //     control_stack.empty(),
+        //     control_stack.allTrue(),
+        // });
 
         // Handle push operations only if the control stack allows execution
         if (isPushOp(operation)) {
-            // const push_data = try readPush(
-            //     p.instruction_bytecode[p.instruction_pointer..],
-            //     p.allocator,
-            // );
-            // if (!isMinimalDataPush(
-            //     p.instruction_bytecode[p.instruction_pointer],
-            //     push_data.data,
-            // )) return StackError.non_minimal;
-            std.debug.print("CondStack size {}\n" ++
-                "empty {}\n" ++ "All true {}\n" ++ "isBranchExec {}\n\n", .{
-                const_stack.size,
-                const_stack.empty(),
-                const_stack.allTrue(),
-                const_stack.isBranchExecuting(),
-            });
             if (!execution_state and !operation.isConditional()) {
+                const push_data = try readPush(
+                    p.instruction_bytecode[p.instruction_pointer..],
+                    p.allocator,
+                );
+                if (!isMinimalDataPush(
+                    p.instruction_bytecode[p.instruction_pointer],
+                    push_data.data,
+                )) return StackError.non_minimal;
                 // If the control stack indicates that this block should not be executed,
                 // skip the push operation and advance the pointer.
-                advancePointer(p);
+                p.instruction_pointer += push_data.bytes_read;
+                // advancePointer(p);
                 return try @call(.always_tail, executeProgram, .{p});
             } else {
                 // Execute the push operation if the control stack allows it.
@@ -324,120 +324,65 @@ pub const VirtualMachine = struct {
     }
 };
 
-// pub const ConditionalStack = struct {
-//     size: usize,
-//     first_false_pos: usize,
-
-//     const NO_FALSE: usize = std.math.maxInt(u32);
-
-//     pub fn init() @This() {
-//         return ConditionalStack{
-//             .size = 0,
-//             .first_false_pos = NO_FALSE,
-//         };
-//     }
-//     pub fn empty(self: *ConditionalStack) bool {
-//         return self.size == 0;
-//     }
-//     pub fn allTrue(self: *ConditionalStack) bool {
-//         return self.first_false_pos == NO_FALSE;
-//     }
-//     pub fn push(self: *ConditionalStack, v: bool) void {
-//         if (self.first_false_pos == NO_FALSE and !v) {
-//             // The stack consists of all true values, and a false is added.
-//             // The first false value will appear at the current size.
-//             self.first_false_pos = self.size;
-//         }
-//         self.size += 1;
-//     }
-//     pub fn pop(self: *ConditionalStack) void {
-//         self.size -= 1;
-//         if (self.first_false_pos == self.size) {
-//             // When popping off the first false value, everything becomes true.
-//             self.first_false_pos = NO_FALSE;
-//         }
-//     }
-//     pub fn toggleTop(self: *ConditionalStack) void {
-//         if (self.first_false_pos == NO_FALSE) {
-//             // The current stack is all true values; the first false will be the top.
-//             self.first_false_pos = self.size - 1;
-//         } else if (self.first_false_pos == self.size - 1) {
-//             // The top is the first false value; toggling it will make everything true.
-//             self.first_false_pos = NO_FALSE;
-//         } else {
-//             // There is a false value, but not on top. No action is needed as toggling
-//             // anything but the first false value is unobservable.
-//         }
-//     }
-//     pub fn isBranchExecuting(self: *ConditionalStack) bool {
-//         if (self.empty()) {
-//             return true;
-//         }
-//         return self.allTrue();
-//     }
-// };
-
-pub const ConstrolStack = struct {
-    bitset: std.bit_set.StaticBitSet(1000), // Fixed size of 1000
+pub const ControlStack = struct {
     size: usize,
+    first_false_pos: usize,
+
+    const NO_FALSE: usize = std.math.maxInt(u32);
 
     pub fn init() @This() {
-        return ConstrolStack{
-            .bitset = std.bit_set.StaticBitSet(1000).initEmpty(),
+        return ControlStack{
             .size = 0,
+            .first_false_pos = NO_FALSE,
         };
     }
-
-    pub fn empty(self: *ConstrolStack) bool {
+    pub fn empty(self: *ControlStack) bool {
         return self.size == 0;
     }
-
-    pub fn allTrue(self: *ConstrolStack) bool {
-        return self.bitset.findFirstSet() == null;
+    pub fn allTrue(self: *ControlStack) bool {
+        return self.first_false_pos == NO_FALSE;
     }
-
-    pub fn push(self: *ConstrolStack, v: bool) void {
-        if (!v) {
-            self.bitset.set(self.size);
+    pub fn push(self: *ControlStack, v: bool) void {
+        if (self.first_false_pos == NO_FALSE and !v) {
+            // The stack consists of all true values, and a false is added.
+            // The first false value will appear at the current size.
+            self.first_false_pos = self.size;
         }
         self.size += 1;
     }
-
-    pub fn pop(self: *ConstrolStack) void {
-        if (self.size == 0) return;
+    pub fn pop(self: *ControlStack) void {
         self.size -= 1;
-        self.bitset.unset(self.size);
+        if (self.first_false_pos == self.size) {
+            // When popping off the first false value, everything becomes true.
+            self.first_false_pos = NO_FALSE;
+        }
     }
-
-    pub fn toggleTop(self: *ConstrolStack) void {
-        if (self.size == 0) return;
-        const index = self.size - 1;
-        if (self.bitset.isSet(index)) {
-            self.bitset.unset(index);
+    pub fn toggleTop(self: *ControlStack) void {
+        if (self.first_false_pos == NO_FALSE) {
+            // The current stack is all true values; the first false will be the top.
+            self.first_false_pos = self.size - 1;
+        } else if (self.first_false_pos == self.size - 1) {
+            // The top is the first false value; toggling it will make everything true.
+            self.first_false_pos = NO_FALSE;
         } else {
-            self.bitset.set(index);
+            // There is a false value, but not on top. No action is needed as toggling
+            // anything but the first false value is unobservable.
         }
-    }
-
-    pub fn isBranchExecuting(self: *ConstrolStack) bool {
-        if (self.empty()) {
-            return true;
-        }
-        return self.allTrue();
     }
 };
+
 test "simple" {
-    var genp_alloc = std.heap.GeneralPurposeAllocator(.{}){};
-    const ally = genp_alloc.allocator();
+    // var genp_alloc = std.heap.GeneralPurposeAllocator(.{}){};
+    // const ally = genp_alloc.allocator();
 
-    var code = [_]u8{ 0x51, 0x51, 0x93, 0x51, 0x93, 0x51, 0x93 };
+    // var code = [_]u8{ 0x51, 0x51, 0x93, 0x51, 0x93, 0x51, 0x93 };
 
-    var script_exec = ScriptExecContext.init();
-    const tx = Transaction.init();
-    script_exec.tx = tx;
-    var program = try Program.init(&code, ally, &script_exec);
+    // var script_exec = ScriptExecContext.init();
+    // const tx = Transaction.init();
+    // script_exec.tx = tx;
+    // var program = try Program.init(ally, &script_exec);
     // var pgrm = try Program.init(instruction_funcs.items.ptr, &code, ally);
-    try VirtualMachine.run(&program);
+    // try VirtualMachine.run(&program);
     // std.debug.print("STACKPOST {any}\n", .{program.stack.slice()});
 }
 test "vmbtests" {
@@ -448,8 +393,8 @@ test "vmbtests" {
     // }
     const ally = genp_alloc.allocator();
 
-    // const path = "bch_2025_standard";
-    const path = "bch_2025_invalid";
+    const path = "bch_2025_standard";
+    // const path = "bch_2025_invalid";
     const base_url = try std.fmt.allocPrint(std.heap.page_allocator, "../vmb_tests/{s}", .{path});
 
     var current_dir = try std.fs.cwd().openDir(base_url, .{ .iterate = true });
@@ -526,11 +471,11 @@ test "vmbtests" {
 
                 break :blk false;
             };
-            const specific_test = "smpz88";
+            const specific_test = "jdtsv0";
             const all = identifier;
             _ = &all;
             _ = &specific_test;
-            const test_match = std.mem.eql(u8, identifier, specific_test);
+            const test_match = std.mem.eql(u8, identifier, all);
             _ = &test_match;
             // const test_match_file = std.mem.eql(u8, "core.cashtokens.vmb_tests.json", test_file.filename);
             const test_match_file = std.mem.eql(u8, "core.signing-serialization.vmb_tests.json", test_file.filename);
@@ -578,7 +523,7 @@ test "vmbtests" {
                     .input_index = @intCast(input_index),
                     .utxo = utxos,
                     .tx = tx_decoded,
-                    .signing_cache = SigningContextCache.init(),
+                    .signing_cache = SigningCache.init(),
                 };
                 var sigser_buff = [_]u8{0} ** (ConsensusBch2025.maximum_standard_transaction_size * 2);
                 try script_exec.computeSigningCache(&sigser_buff);

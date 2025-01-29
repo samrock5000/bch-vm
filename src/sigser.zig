@@ -241,20 +241,20 @@ pub fn encodeSequence(tx: *Transaction, writer: anytype) !usize {
     }
     return len;
 }
-pub const SigningContextCache = struct {
+pub const SigningCache = struct {
     hash_prevouts: u256,
     hash_sequence: u256,
     hash_outputs: u256,
     hash_utxos: u256,
-    pub fn init() SigningContextCache {
-        return SigningContextCache{
+    pub fn init() SigningCache {
+        return SigningCache{
             .hash_prevouts = 0,
             .hash_sequence = 0,
             .hash_outputs = 0,
             .hash_utxos = 0,
         };
     }
-    pub fn compute(self: *SigningContextCache, ctx: *ScriptExec, buf: []u8) !void {
+    pub fn compute(self: *SigningCache, ctx: *ScriptExec, buf: []u8) !void {
         // std.debug.print("{}\n", .{Transaction.calculateOutputsSize(ctx.utxo)});
         var fb = std.io.fixedBufferStream(buf);
         // std.debug.print("Buffer length at compute: {}\n", .{buf.len});
@@ -290,7 +290,7 @@ pub fn encodeWithPrecompute(
     idx: usize,
     sigser_writer: *Encoder,
     alloc: Allocator,
-    precompute: *SigningContextCache,
+    precompute: *SigningCache,
 ) !usize {
     const flag = std.mem.toBytes(hashflag);
     const emptyhash: [32]u8 = .{0x00} ** 32;
@@ -446,7 +446,7 @@ test "precompute" {
         .input_index = 0,
         .utxo = utxos,
         .tx = tx,
-        .signing_cache = SigningContextCache.init(),
+        .signing_cache = SigningCache.init(),
     };
     _ = &ctx;
     var buf: [32 * 4]u8 = .{0} ** 128;
