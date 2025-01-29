@@ -52,7 +52,7 @@ pub const Program = struct {
     instruction_pointer: usize,
     code_seperator: usize,
     allocator: Allocator,
-    control_stack: ConditionalStack,
+    control_stack: ConstrolStack,
     metrics: Metrics,
     context: *ScriptExecContext,
     // has_error: ?anyerror!void,
@@ -63,7 +63,7 @@ pub const Program = struct {
         return Program{
             .stack = try std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length).init(0),
             .alt_stack = try std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length).init(0),
-            .control_stack = ConditionalStack.init(),
+            .control_stack = ConstrolStack.init(),
             .instruction_bytecode = undefined,
             .instruction_pointer = 0,
             .code_seperator = 0,
@@ -101,19 +101,19 @@ pub const VirtualMachine = struct {
     }
     fn pushOperation(program: *Program) !void {
         const ip = program.instruction_pointer;
+        // const execution_state = program.control_stack.empty();
         const push_res = try readPush(
             program.instruction_bytecode[ip..],
             program.allocator,
         );
-        // std.debug.print("Push Result {any}\n", .{push_res.data});
         if (!isMinimalDataPush(
             program.instruction_bytecode[ip],
             push_res.data,
         )) return StackError.non_minimal;
+        // std.debug.print("OPPUSH  {any}\n", .{push_res.data});
         try program.stack.append(StackValue{ .bytes = push_res.data });
         program.instruction_pointer += push_res.bytes_read;
     }
-
     pub fn evaluateProto(p: *Program) !void {
         const unlock_code = p.context.tx.inputs[p.context.input_index].script;
         const lock_code = p.context.utxo[p.context.input_index].script;
@@ -172,36 +172,54 @@ pub const VirtualMachine = struct {
 
         const operation = getOperation(p);
         const execution_state = p.control_stack.allTrue();
+        var const_stack = p.control_stack;
 
-        if (execution_state) {
-            if (operation.isUnknownOpcode()) {
-                return StackError.unassigned_opcode;
+        // Skip disabled opcodes
+        if (operation.isDisabled()) {
+            return StackError.disabled_opcode;
+        }
+
+        // Handle push operations only if the control stack allows execution
+        if (isPushOp(operation)) {
+            // const push_data = try readPush(
+            //     p.instruction_bytecode[p.instruction_pointer..],
+            //     p.allocator,
+            // );
+            // if (!isMinimalDataPush(
+            //     p.instruction_bytecode[p.instruction_pointer],
+            //     push_data.data,
+            // )) return StackError.non_minimal;
+            std.debug.print("CondStack size {}\n" ++
+                "empty {}\n" ++ "All true {}\n" ++ "isBranchExec {}\n\n", .{
+                const_stack.size,
+                const_stack.empty(),
+                const_stack.allTrue(),
+                const_stack.isBranchExecuting(),
+            });
+            if (!execution_state and !operation.isConditional()) {
+                // If the control stack indicates that this block should not be executed,
+                // skip the push operation and advance the pointer.
+                advancePointer(p);
+                return try @call(.always_tail, executeProgram, .{p});
+            } else {
+                // Execute the push operation if the control stack allows it.
+                try pushOperation(p);
+                // advancePointer(p);
+                return try @call(.always_tail, executeProgram, .{p});
             }
-            if (operation.isDisabled()) {
-                return StackError.disabled_opcode;
-            }
         }
 
-        if (!operation.isConditional() and !p.control_stack.isBranchExecuting()) {
-            advancePointer(p);
-            try @call(.always_tail, executeProgram, .{p});
-        }
-
-        if (isPushOp(operation) and execution_state) {
-            try pushOperation(p);
-            return try @call(.always_tail, executeProgram, .{p});
-        }
-
+        // Handle conditional and non-conditional operations
         if (execution_state or operation.isConditional()) {
             try VirtualMachine.execute(p);
             advancePointer(p);
-            try @call(.always_tail, executeProgram, .{p});
+            return try @call(.always_tail, executeProgram, .{p});
         } else {
+            // Skip non-conditional operations if the control stack indicates no execution.
             advancePointer(p);
             return try @call(.always_tail, executeProgram, .{p});
         }
     }
-
     fn verify(
         program: *Program,
     ) !bool {
@@ -306,59 +324,108 @@ pub const VirtualMachine = struct {
     }
 };
 
-pub const ConditionalStack = struct {
-    size: usize,
-    first_false_pos: usize,
+// pub const ConditionalStack = struct {
+//     size: usize,
+//     first_false_pos: usize,
 
-    const NO_FALSE: usize = std.math.maxInt(u32);
+//     const NO_FALSE: usize = std.math.maxInt(u32);
+
+//     pub fn init() @This() {
+//         return ConditionalStack{
+//             .size = 0,
+//             .first_false_pos = NO_FALSE,
+//         };
+//     }
+//     pub fn empty(self: *ConditionalStack) bool {
+//         return self.size == 0;
+//     }
+//     pub fn allTrue(self: *ConditionalStack) bool {
+//         return self.first_false_pos == NO_FALSE;
+//     }
+//     pub fn push(self: *ConditionalStack, v: bool) void {
+//         if (self.first_false_pos == NO_FALSE and !v) {
+//             // The stack consists of all true values, and a false is added.
+//             // The first false value will appear at the current size.
+//             self.first_false_pos = self.size;
+//         }
+//         self.size += 1;
+//     }
+//     pub fn pop(self: *ConditionalStack) void {
+//         self.size -= 1;
+//         if (self.first_false_pos == self.size) {
+//             // When popping off the first false value, everything becomes true.
+//             self.first_false_pos = NO_FALSE;
+//         }
+//     }
+//     pub fn toggleTop(self: *ConditionalStack) void {
+//         if (self.first_false_pos == NO_FALSE) {
+//             // The current stack is all true values; the first false will be the top.
+//             self.first_false_pos = self.size - 1;
+//         } else if (self.first_false_pos == self.size - 1) {
+//             // The top is the first false value; toggling it will make everything true.
+//             self.first_false_pos = NO_FALSE;
+//         } else {
+//             // There is a false value, but not on top. No action is needed as toggling
+//             // anything but the first false value is unobservable.
+//         }
+//     }
+//     pub fn isBranchExecuting(self: *ConditionalStack) bool {
+//         if (self.empty()) {
+//             return true;
+//         }
+//         return self.allTrue();
+//     }
+// };
+
+pub const ConstrolStack = struct {
+    bitset: std.bit_set.StaticBitSet(1000), // Fixed size of 1000
+    size: usize,
 
     pub fn init() @This() {
-        return ConditionalStack{
+        return ConstrolStack{
+            .bitset = std.bit_set.StaticBitSet(1000).initEmpty(),
             .size = 0,
-            .first_false_pos = NO_FALSE,
         };
     }
-    pub fn empty(self: *ConditionalStack) bool {
+
+    pub fn empty(self: *ConstrolStack) bool {
         return self.size == 0;
     }
-    pub fn allTrue(self: *ConditionalStack) bool {
-        return self.first_false_pos == NO_FALSE;
+
+    pub fn allTrue(self: *ConstrolStack) bool {
+        return self.bitset.findFirstSet() == null;
     }
-    pub fn push(self: *ConditionalStack, v: bool) void {
-        if (self.first_false_pos == NO_FALSE and !v) {
-            // The stack consists of all true values, and a false is added.
-            // The first false value will appear at the current size.
-            self.first_false_pos = self.size;
+
+    pub fn push(self: *ConstrolStack, v: bool) void {
+        if (!v) {
+            self.bitset.set(self.size);
         }
         self.size += 1;
     }
-    pub fn pop(self: *ConditionalStack) void {
+
+    pub fn pop(self: *ConstrolStack) void {
+        if (self.size == 0) return;
         self.size -= 1;
-        if (self.first_false_pos == self.size) {
-            // When popping off the first false value, everything becomes true.
-            self.first_false_pos = NO_FALSE;
-        }
+        self.bitset.unset(self.size);
     }
-    pub fn toggleTop(self: *ConditionalStack) void {
-        if (self.first_false_pos == NO_FALSE) {
-            // The current stack is all true values; the first false will be the top.
-            self.first_false_pos = self.size - 1;
-        } else if (self.first_false_pos == self.size - 1) {
-            // The top is the first false value; toggling it will make everything true.
-            self.first_false_pos = NO_FALSE;
+
+    pub fn toggleTop(self: *ConstrolStack) void {
+        if (self.size == 0) return;
+        const index = self.size - 1;
+        if (self.bitset.isSet(index)) {
+            self.bitset.unset(index);
         } else {
-            // There is a false value, but not on top. No action is needed as toggling
-            // anything but the first false value is unobservable.
+            self.bitset.set(index);
         }
     }
-    pub fn isBranchExecuting(self: *ConditionalStack) bool {
+
+    pub fn isBranchExecuting(self: *ConstrolStack) bool {
         if (self.empty()) {
             return true;
         }
         return self.allTrue();
     }
 };
-
 test "simple" {
     var genp_alloc = std.heap.GeneralPurposeAllocator(.{}){};
     const ally = genp_alloc.allocator();
@@ -399,6 +466,8 @@ test "vmbtests" {
         test_files.deinit();
     }
 
+    // var script_exec = ScriptExecContext.init();
+    // var program = try Program.init(ally, &script_exec);
     // Collect all test files first
     var dir_iterator = current_dir.iterate();
     while (try dir_iterator.next()) |entry| {
@@ -457,7 +526,7 @@ test "vmbtests" {
 
                 break :blk false;
             };
-            const specific_test = "qwqmel";
+            const specific_test = "smpz88";
             const all = identifier;
             _ = &all;
             _ = &specific_test;
@@ -522,25 +591,21 @@ test "vmbtests" {
                 // _ = try evaluateProto(&program);
                 const res = VirtualMachine.verify(&program) catch |err| {
                     _ = &err;
-                    // std.debug.print("ID {s}\n", .{identifier});
-                    // std.debug.print("Failed verification  {any}\n", .{err});
+                    std.debug.print("ID {s}\n", .{identifier});
+                    std.debug.print("Failed verification  {any}\n", .{err});
                     failed_verifications += 1;
                     verification_count += 1;
                     continue;
                 };
                 if (!res) {
-                    //     std.debug.print("ID {s}\n", .{identifier});
+                    std.debug.print("ID {s}\n", .{identifier});
                     //     std.debug.print("Failed non truthy stack top item {any}\n", .{res});
                     failed_verifications += 1;
                 }
 
-                // if (program.has_error) |err| {
-                //     std.debug.print("ID {s}\n", .{identifier});
-                //     std.debug.print("Contains error {any}\n", .{err});
-                // }
                 verify_end = std.time.microTimestamp();
                 if (res) {
-                    std.debug.print("ID {s}\n", .{identifier});
+                    // std.debug.print("ID {s}\n", .{identifier});
                     // std.debug.print("Testing {s}\nID {s}\n", .{ test_file.filename, identifier });
                     passed_count += 1;
                 }
@@ -549,22 +614,6 @@ test "vmbtests" {
                 // std.debug.print("Testing: {s}\n", .{
                 //     test_file.filename,
                 // });
-                std.debug.print("Metrics\n" ++
-                    "Sig checks: {}\n" ++
-                    "Op Cost: {}\n" ++
-                    "Hash iterations: {}\n" ++
-                    "Is over cost limit: {}\n" ++
-                    "Is Over Hash {}\n" ++
-                    // "Has Limits {}\n" ++
-                    "Composite Op Cost: {}\n", .{
-                    program.metrics.sig_checks,
-                    program.metrics.op_cost,
-                    program.metrics.hash_digest_iterations,
-                    program.metrics.isOverOpCostLimit(true),
-                    program.metrics.isOverHashItersLimit(),
-                    // program.metrics.hasValidScriptLimits(),
-                    program.metrics.getCompositeOpCost(true),
-                });
                 // std.debug.print("Verify  {any}\n\n", .{res});
                 end_time = std.time.nanoTimestamp();
                 const verification_duration = verify_end - verify_start;
@@ -578,6 +627,22 @@ test "vmbtests" {
         @divTrunc(total_verification_time, @as(i128, @intCast(verification_count)))
     else
         0;
+    // std.debug.print("metrics\n" ++
+    //     "sig checks: {}\n" ++
+    //     "op cost: {}\n" ++
+    //     "hash iterations: {}\n" ++
+    //     "is over cost limit: {}\n" ++
+    //     "is over hash {}\n" ++
+    //     // "has limits {}\n" ++
+    //     "composite op cost: {}\n", .{
+    //     program.metrics.sig_checks,
+    //     program.metrics.op_cost,
+    //     program.metrics.hash_digest_iterations,
+    //     program.metrics.isOverOpCostLimit(true),
+    //     program.metrics.isOverHashItersLimit(),
+    //     // program.metrics.hasvalidscriptlimits(),
+    //     program.metrics.getCompositeOpCost(true),
+    // });
     std.debug.print("\nPerformance Statistics:\n" ++
         "Total Execution Time: {d} ns\n" ++
         "Total Verification Time: {d} ns\n" ++
@@ -590,8 +655,8 @@ test "vmbtests" {
         average_verification_time,
         verification_count,
         failed_verifications,
-        // 0,
-        @divTrunc(@as(i128, 1_000_000_000), average_verification_time),
+        0,
+        // @divTrunc(@as(i128, 1_000_000_000), average_verification_time),
     });
 }
 

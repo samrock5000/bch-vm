@@ -699,7 +699,7 @@ pub fn op_if(program: *Program) anyerror!void {
     _ = program.stack.pop();
 
     program.control_stack.push(b);
-    // std.debug.print("control stack  {} {any}\n", .{ program.control_stack.allTrue(), program.stack.slice() });
+    // std.debug.print("control stack  {} {any}\n", .{ program.control_stack.size, program.stack.slice() });
 }
 
 pub fn op_notif(program: *Program) anyerror!void {
@@ -721,17 +721,6 @@ pub fn op_notif(program: *Program) anyerror!void {
 pub fn op_verif(program: *Program) anyerror!void {
     _ = program;
     return error.DisabledOpcode;
-    // if (program.stack.len < 1) {
-    //     return error.read_empty_stack;
-    // }
-
-    // const top = program.stack.get(program.stack.len - 1);
-    // const b = readScriptBool(top.bytes);
-    // if (b) {
-    //     _ = program.stack.pop();
-    // } else {
-    //     return error.verify;
-    // }
 }
 
 pub fn op_vernotif(program: *Program) anyerror!void {
@@ -1597,7 +1586,6 @@ pub fn op_numequalverify(program: *Program) anyerror!void {
         return error.read_empty_stack;
     }
     const quadratic_op_cost: u32 = 0;
-    const push_cost_factor: u32 = 1;
 
     const item_lhs = program.stack.get(program.stack.len - 2);
     const item_rhs = program.stack.get(program.stack.len - 1);
@@ -1609,12 +1597,10 @@ pub fn op_numequalverify(program: *Program) anyerror!void {
         return error.equal_verify_fail;
     }
     try int_l.set(@intFromBool(op_res));
-    // quadratic_op_cost = @intCast(item_lhs.bytes.len * item_rhs.bytes.len);
-    // push_cost_factor = 2;
     _ = program.stack.pop();
     _ = program.stack.pop();
     program.metrics.tallyOp(quadratic_op_cost);
-    program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
+    // program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
 }
 
 pub fn op_numnotequal(program: *Program) anyerror!void {
@@ -1828,8 +1814,7 @@ pub fn op_ripemd160(program: *Program) anyerror!void {
     const item = program.stack.pop();
     var buff = try program.allocator.alloc(u8, 32);
     const is_two_rounds = false;
-    var hash_len: usize = 0;
-    hash_len = 20;
+    const hash_len: usize = 20;
     ripemd160.Ripemd160.hash(item.bytes, buff[0..20], .{});
     try program.stack.append(StackValue{ .bytes = buff[0..hash_len] });
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
@@ -1843,8 +1828,7 @@ pub fn op_sha1(program: *Program) anyerror!void {
     const item = program.stack.pop();
     var buff = try program.allocator.alloc(u8, 32);
     const is_two_rounds = false;
-    var hash_len: usize = 0;
-    hash_len = 20;
+    const hash_len: usize = 20;
     std.crypto.hash.Sha1.hash(item.bytes, buff[0..20], .{});
     try program.stack.append(StackValue{ .bytes = buff[0..hash_len] });
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
@@ -1858,8 +1842,7 @@ pub fn op_sha256(program: *Program) anyerror!void {
     const item = program.stack.pop();
     var buff = try program.allocator.alloc(u8, 32);
     const is_two_rounds = false;
-    var hash_len: usize = 0;
-    hash_len = 32;
+    const hash_len = 32;
     std.crypto.hash.sha2.Sha256.hash(item.bytes, buff[0..32], .{});
     try program.stack.append(StackValue{ .bytes = buff[0..hash_len] });
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
@@ -1873,8 +1856,7 @@ pub fn op_hash160(program: *Program) anyerror!void {
     const item = program.stack.pop();
     var buff = try program.allocator.alloc(u8, 32);
     const is_two_rounds = true;
-    var hash_len: usize = 0;
-    hash_len = 20;
+    const hash_len: usize = 20;
     std.crypto.hash.sha2.Sha256.hash(item.bytes, buff[0..32], .{});
     ripemd160.Ripemd160.hash(buff[0..32], buff[0..20], .{});
     try program.stack.append(StackValue{ .bytes = buff[0..hash_len] });
@@ -1889,8 +1871,8 @@ pub fn op_hash256(program: *Program) anyerror!void {
     const item = program.stack.pop();
     var buff = try program.allocator.alloc(u8, 32);
     const is_two_rounds = true;
-    var hash_len: usize = 0;
-    hash_len = 32;
+    const hash_len: usize = 32;
+    // hash_len = 32;
     std.crypto.hash.sha2.Sha256.hash(item.bytes, buff[0..32], .{});
     std.crypto.hash.sha2.Sha256.hash(buff[0..32], buff[0..32], .{});
     try program.stack.append(StackValue{ .bytes = buff[0..hash_len] });
@@ -2063,12 +2045,12 @@ pub fn op_checkmultisig(program: *Program) anyerror!void {
             if (tmp_bytes_hashed > bytes_hashed) {
                 bytes_hashed = tmp_bytes_hashed;
             }
-            // program.metrics.tallySigChecks(1);
+            program.metrics.tallySigChecks(1);
             i_key += 1;
         }
 
         if (bytes_hashed > 0) {
-            // program.metrics.tallyHashOp(@intCast(bytes_hashed), true);
+            program.metrics.tallyHashOp(@intCast(bytes_hashed), true);
         }
         if ((checkbits >> i_key) != 0) {
             return error.invalid_bit_count;
@@ -2118,9 +2100,9 @@ pub fn op_checkmultisig(program: *Program) anyerror!void {
             }
         }
         if (!all_signatures_null) {
-            // program.metrics.tallySigChecks(@intCast(num_pubkeys));
+            program.metrics.tallySigChecks(@intCast(num_pubkeys));
             if (bytes_hashed > 0) {
-                // program.metrics.tallyHashOp(@intCast(bytes_hashed), true);
+                program.metrics.tallyHashOp(@intCast(bytes_hashed), true);
             }
         }
     }
