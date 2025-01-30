@@ -1,6 +1,5 @@
 const std = @import("std");
 const May2025 = @import("vm_limits.zig").May2025;
-const ScriptExecContext = @import("stack.zig").ScriptExecContext;
 
 pub const ScriptExecutionMetrics = struct {
     sig_checks: i32 = 0,

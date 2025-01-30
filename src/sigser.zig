@@ -2,7 +2,7 @@ const std = @import("std");
 const Transaction = @import("transaction.zig");
 const Allocator = std.mem.Allocator;
 const sha256 = std.crypto.hash.sha2.Sha256.hash;
-const Encoder = @import("encoding.zig");
+const Cursor = @import("encoding.zig");
 const ScriptExecContext = @import("stack.zig").ScriptExecutionContext;
 // const VM = @import("vm.zig");
 // const SCRIPT_ENABLE_MAY2025 = @import("vm.zig").SCRIPT_ENABLE_MAY2025;
@@ -19,7 +19,7 @@ pub fn encode(
     hashflag: i32,
     script: []const u8,
     idx: usize,
-    sigser_writer: *Encoder,
+    sigser_writer: *Cursor,
     alloc: Allocator,
 ) !usize {
     const flag = std.mem.toBytes(hashflag);
@@ -33,7 +33,7 @@ pub fn encode(
     defer buff.deinit();
     try buff.resize(sigser_writer.fbs.buffer.len);
     @memset(buff.items, 0); // Ensure buffer is initialized
-    var encoder = Encoder.init(buff.items);
+    var encoder = Cursor.init(buff.items);
     const script_slice = try alloc.alloc(u8, script.len);
     defer alloc.free(script_slice);
     @memcpy(script_slice, script);
@@ -88,7 +88,7 @@ pub fn encode(
         }
     }
 
-    len += try Encoder.writeVarBytes(sigser_writer.fbs.writer(), script_slice);
+    len += try Cursor.writeVarBytes(sigser_writer.fbs.writer(), script_slice);
     // std.debug.dumpHex(sigser_writer.fbs.getWritten());
     try sigser_writer.fbs.writer().writeInt(u64, src_outs.*[idx].satoshis, .little);
     len += 8;
@@ -282,7 +282,7 @@ pub fn encodeWithPrecompute(
     hashflag: i32,
     script: []const u8,
     idx: usize,
-    sigser_writer: *Encoder,
+    sigser_writer: *Cursor,
     alloc: Allocator,
     precompute: *SigningCache,
 ) !usize {
@@ -334,7 +334,7 @@ pub fn encodeWithPrecompute(
         }
     }
 
-    len += try Encoder.writeVarBytes(sigser_writer.fbs.writer(), script_slice);
+    len += try Cursor.writeVarBytes(sigser_writer.fbs.writer(), script_slice);
     try sigser_writer.fbs.writer().writeInt(u64, src_outs.*[idx].satoshis, .little);
     len += 8;
     try sigser_writer.fbs.writer().writeInt(u32, ctx.inputs[idx].sequence, .little);
@@ -354,7 +354,7 @@ pub fn encodeWithPrecompute(
             defer buff.deinit();
             try buff.resize(sigser_writer.fbs.buffer.len);
             @memset(buff.items, 0);
-            var encoder = Encoder.init(buff.items);
+            var encoder = Cursor.init(buff.items);
 
             _ = try ctx.outputs[idx].encode(encoder.fbs.writer());
             _ = sha256(encoder.fbs.getWritten(), &hash_ouputs, .{});
@@ -393,10 +393,10 @@ test "sighash" {
     // const covered_bytecode = try std.fmt.hexToBytes(script_buff, script);
     // const expect = try std.fmt.hexToBytes(sigser_expect_buff, sigser_expect);
 
-    // var cursor = Encoder.init(&out);
-    // var source_out_encoder = Encoder.init(source_outs_buff);
+    // var cursor = Cursor.init(&out);
+    // var source_out_encoder = Cursor.init(source_outs_buff);
     // const source_outs = try Transaction.readOutputs(&source_out_encoder, allocator);
-    // var data = Encoder.init(buffer2);
+    // var data = Cursor.init(buffer2);
     // const transaction = try Transaction.decode(&cursor, allocator);
     // // const hashtype: i32 = 0x01 | 0x20;
     // const hashtype: i32 = @intFromEnum(SigHash.allOutputsAllUtxos);
@@ -428,10 +428,10 @@ test "precompute" {
     var buff_src_outs: [1000]u8 = undefined;
     const raw_tx_bytes = try std.fmt.hexToBytes(&buff_tx, &tx_hex);
     const raw_src_outs_bytes = try std.fmt.hexToBytes(&buff_src_outs, &tx_src_outs);
-    var src_outs_reader = Encoder.init(raw_src_outs_bytes);
+    var src_outs_reader = Cursor.init(raw_src_outs_bytes);
     var utxos = try Transaction.readOutputs(&src_outs_reader, allocator);
 
-    var tx_reader = Encoder.init(raw_tx_bytes);
+    var tx_reader = Cursor.init(raw_tx_bytes);
     var tx = try Transaction.decode(&tx_reader, allocator);
 
     var ctx = ScriptExecContext{
@@ -454,7 +454,7 @@ test "precompute" {
     defer serialized_tx_data.deinit();
     try serialized_tx_data.resize(tx_size + utxo_size + 128);
 
-    var sigser_writer = Encoder.init(serialized_tx_data.items);
+    var sigser_writer = Cursor.init(serialized_tx_data.items);
     const encode_precompute_start = std.time.nanoTimestamp();
     _ = try encodeWithPrecompute(&tx, &utxos, hashflag, script, ctx.input_index, &sigser_writer, allocator, &ctx.signing_cache);
     const encode_precompute_end = std.time.nanoTimestamp();
@@ -463,7 +463,7 @@ test "precompute" {
 
     var serialized_tx_data2 = try std.ArrayList(u8).initCapacity(allocator, tx_size + utxo_size);
     defer serialized_tx_data2.deinit();
-    var sigser_writer2 = Encoder.init(serialized_tx_data.items);
+    var sigser_writer2 = Cursor.init(serialized_tx_data.items);
 
     const encode_start = std.time.nanoTimestamp();
     _ = try encode(&tx, &utxos, hashflag, script, ctx.input_index, &sigser_writer2, allocator);
@@ -527,7 +527,7 @@ test "sighash flags" {
     // defer ally.free(tx_buff);
     // defer ally.free(signature_hash_buff);
     // std.debug.print("{x}\n{}\n{}\n{x}\n", .{ script, input, hash_type, signature });
-    // var tx_writer = Encoder.init(txlist.items);
+    // var tx_writer = Cursor.init(txlist.items);
     // const transaction = try Transaction.decode(&tx_writer, ally.allocator());
 
     // std.debug.print("tx {any}", .{transaction});
@@ -572,9 +572,9 @@ test "multisig" {
     // const s = try std.fmt.hexToBytes(&sig_buff, sig);
     // const p = try std.fmt.hexToBytes(&pubkey_buff, pk);
 
-    // var cursor = Encoder.init(&tx_buff);
-    // var data = Encoder.init(&buffer2);
-    // var src_outs = Encoder.init(&utxo_buff);
+    // var cursor = Cursor.init(&tx_buff);
+    // var data = Cursor.init(&buffer2);
+    // var src_outs = Cursor.init(&utxo_buff);
     // var lockscript = [_]u8{0x51};
     // var outs =
     //     [_]Transaction.Output{Transaction.Output{ .satoshis = 0, .script = &.{}, .token = null }};
@@ -632,9 +632,9 @@ test "cpg9xc" {
     // const ser_expect = try std.fmt.hexToBytes(&sig_buff, expect_sigser);
     // // const p = try std.fmt.hexToBytes(&pubkey_buff, pk);
 
-    // var cursor = Encoder.init(&tx_buff);
-    // var data = Encoder.init(buffer2);
-    // var src_outs = Encoder.init(&utxo_buff);
+    // var cursor = Cursor.init(&tx_buff);
+    // var data = Cursor.init(buffer2);
+    // var src_outs = Cursor.init(&utxo_buff);
     // var lockscript = [_]u8{0x51};
     // var outs =
     //     [_]Transaction.Output{Transaction.Output{ .satoshis = 0, .script = &.{}, .token = null }};

@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const Cursor = @This();
 fbs: std.io.FixedBufferStream([]u8),
+
 pub fn init(data: []u8) Cursor {
     return .{
         .fbs = std.io.fixedBufferStream(data),

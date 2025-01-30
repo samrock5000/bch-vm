@@ -1,5 +1,5 @@
 const std = @import("std");
-const Encoder = @import("encoding.zig");
+const Cursor = @import("encoding.zig");
 const CashToken = @import("token.zig");
 pub const Transaction = @This();
 const Allocator = std.mem.Allocator;
@@ -25,7 +25,7 @@ pub const Input = struct {
         return Input{
             .txid = try encoder.readInt(u256, .big),
             .index = try encoder.readInt(u32, .little),
-            .script = try Encoder.readVarBytes(encoder, allocator),
+            .script = try Cursor.readVarBytes(encoder, allocator),
             .sequence = try encoder.readInt(u32, .little),
         };
     }
@@ -35,7 +35,7 @@ pub const Input = struct {
         len += 32;
         try writer.writeInt(u32, self.index, .little);
         len += 4;
-        len += try Encoder.writeVarBytes(writer, self.script);
+        len += try Cursor.writeVarBytes(writer, self.script);
         try writer.writeInt(u32, self.sequence, .little);
         len += 4;
         return len;
@@ -46,14 +46,12 @@ pub const Output = struct {
     script: []u8,
     satoshis: u64,
     token: ?CashToken,
-    pub fn decode(encoder: *Encoder, allocator: Allocator) !Output {
-        // _ = &allocator;
+    pub fn decode(encoder: *Cursor, allocator: Allocator) !Output {
         const reader = encoder.fbs.reader();
         const sats = try reader.readInt(u64, .little);
         const seek_pos = encoder.fbs.pos;
         var has_token = false;
-        _ = try Encoder.readVarint(reader);
-        // std.debug.print("WE HERE {}", .{seek_pos});
+        _ = try Cursor.readVarint(reader);
         if (try encoder.fbs.getPos() < try encoder.fbs.getEndPos()) {
             const prefix_byte = try reader.readByte();
             has_token = prefix_byte == CashToken.PREFIX_TOKEN;
@@ -70,77 +68,55 @@ pub const Output = struct {
         } else {
             return Output{
                 .satoshis = sats,
-                .script = try Encoder.readVarBytes(reader, allocator),
+                .script = try Cursor.readVarBytes(reader, allocator),
                 .token = null,
             };
         }
     }
     pub fn encode(self: Output, writer: anytype) !usize {
         var len: usize = 0;
-        // std.debug.print("Buffer length at encode: {}\n", .{writer.context.buffer.len});
         // Write satoshis
         try writer.writeInt(u64, self.satoshis, .little);
         len += @sizeOf(u64);
 
         if (self.token) |token| {
-            // // First, calculate the total script length
-            // var counting_writer = std.io.countingWriter(std.io.null_writer);
-            // _ = try token.encodeTokenScript(counting_writer.writer());
-            // const token_script_len = counting_writer.bytes_written;
-            // const total_script_len = token_script_len + self.script.len;
-
-            // // Write the total script length as varint
-            // len += try Encoder.writeVarint(writer, total_script_len);
-
-            // // Now write the actual data
-            // len += try token.encodeTokenScript(writer);
-            // len += try writer.write(self.script);
-            //----------------------
             // Get length directly from encode function
             const token_script_len = try token.encodeTokenScript(std.io.null_writer);
             const total_script_len = token_script_len + self.script.len;
 
             // Write the total script length as varint
-            len += try Encoder.writeVarint(writer, total_script_len);
+            len += try Cursor.writeVarint(writer, total_script_len);
 
             // Now write the actual data
             len += try token.encodeTokenScript(writer);
             len += try writer.write(self.script);
         } else {
             // Write script length as varint
-            len += try Encoder.writeVarint(writer, self.script.len);
-
+            len += try Cursor.writeVarint(writer, self.script.len);
             // Write the script
-            // self.script.len;
-            // std.debug.print("Script length: {}, Current pos: {}, Available space: {}\n", .{
-            //     self.script.len,
-            //     try writer.context.getPos(),
-            //     try writer.context.getEndPos() - try writer.context.getPos(),
-            // });
             len += try writer.write(self.script);
-            // std.debug.print("POS {any}\n", .{try writer.context.getPos()});
-            // std.debug.print("POS END {any}\n", .{try writer.context.getEndPos()});
         }
 
         return len;
     }
 };
 
+/// Expects `Cursor` type
 pub fn readInputs(
     encoder: anytype,
     allocator: Allocator,
 ) ![]Input {
     const reader = encoder.fbs.reader();
-    const inputs_len = try Encoder.readVarint(reader);
+    const inputs_len = try Cursor.readVarint(reader);
     const inputs = try allocator.alloc(Input, inputs_len);
     for (0..inputs_len) |i| {
         inputs[i] = try Input.decode(reader, allocator);
     }
     return inputs;
 }
-pub fn readOutputs(encoder: *Encoder, allocator: Allocator) ![]Output {
+pub fn readOutputs(encoder: *Cursor, allocator: Allocator) ![]Output {
     const reader = encoder.fbs.reader();
-    const outputs_len = try Encoder.readVarint(reader);
+    const outputs_len = try Cursor.readVarint(reader);
     const outputs = try allocator.alloc(Output, outputs_len);
     // var fbs = std.io.fixedBufferStream(outputs);
     for (0..outputs_len) |i| {
@@ -150,7 +126,7 @@ pub fn readOutputs(encoder: *Encoder, allocator: Allocator) ![]Output {
     return outputs;
 }
 pub fn decode(
-    encoder: *Encoder,
+    encoder: *Cursor,
     allocator: Allocator,
 ) !Transaction {
     const reader = encoder.fbs.reader();
@@ -163,7 +139,7 @@ pub fn decode(
 }
 pub fn encodeOutputs(tx: *Transaction, writer: anytype) !usize {
     var len: usize = 0;
-    len += try Encoder.writeVarint(writer, tx.outputs.len);
+    len += try Cursor.writeVarint(writer, tx.outputs.len);
     for (tx.outputs) |*output| {
         len += try output.encode(writer);
     }
@@ -174,11 +150,11 @@ pub fn encode(tx: *Transaction, writer: anytype) !usize {
     try writer.writeInt(u32, tx.version, .little);
     len += 4;
 
-    len += try Encoder.writeVarint(writer, tx.inputs.len);
+    len += try Cursor.writeVarint(writer, tx.inputs.len);
     for (tx.inputs) |*input| {
         len += try input.encode(writer);
     }
-    len += try Encoder.writeVarint(writer, tx.outputs.len);
+    len += try Cursor.writeVarint(writer, tx.outputs.len);
     for (tx.outputs) |*output| {
         len += try output.encode(writer);
     }
@@ -217,7 +193,7 @@ test "encode(de)code input" {
 
     // _ = try std.fmt.hexToBytes(&out, serialized_input);
 
-    // var cursor = Encoder.init(&out);
+    // var cursor = Cursor.init(&out);
     // var vin = try Input.decode(&cursor);
 
     // _ = try vin.encode(list.writer());
@@ -310,7 +286,7 @@ test "encode(de)code output" {
 
     _ = try std.fmt.hexToBytes(&out, serialized_ouput);
 
-    var cursor = Encoder.init(&out);
+    var cursor = Cursor.init(&out);
     const output = try Output.decode(&cursor, std.testing.allocator);
     _ = output;
     // std.debug.print("OUTPUT: {any}\n", .{output.script});
@@ -334,13 +310,13 @@ test "encode(de)code transaction" {
     defer allocator.free(memory);
     // var fbs = std.io.fixedBufferStream(&memory);
     // var buff: [20000]u8 = undefined;
-    var decoder = Encoder.init(&out);
+    var decoder = Cursor.init(&out);
     var transaction = try Transaction.decode(&decoder, allocator);
     // for (transaction.outputs) |t| {
     //     std.debug.print("decoded {any}\n\n", .{t.token});
     // }
     // cursor.fbs.reset();
-    var coder = Encoder.init(memory);
+    var coder = Cursor.init(memory);
     // _ = try transaction.encode(coder.fbs.writer());
     _ = try transaction.outputs[3].encode(coder.fbs.writer());
     // std.debug.print("encoded {any}\n\n", .{coder.fbs.getWritten()});
@@ -361,7 +337,7 @@ test "scratch" {
     defer allocator.free(memory);
     // var fbs = std.io.fixedBufferStream(&memory);
     // var buff: [20000]u8 = undefined;
-    var decoder = Encoder.init(&out);
+    var decoder = Cursor.init(&out);
     var transaction = try Transaction.decode(&decoder, allocator);
     // for (transaction.outputs) |t| {
     //     std.debug.print("decoded {any}\n\n", .{t.token});
@@ -374,7 +350,7 @@ test "scratch" {
     _ = try transaction.encode(counting_writer.writer());
     // std.debug.print("decoded {any}\n\n", .{counting_writer.bytes_written});
     // cursor.fbs.reset();
-    // var coder = Encoder.init(memory);
+    // var coder = Cursor.init(memory);
     // _ = try transaction.encode(coder.fbs.writer());
     // _ = try transaction.outputs[3].encode(coder.fbs.writer());
 }
