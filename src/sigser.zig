@@ -4,15 +4,12 @@ const Allocator = std.mem.Allocator;
 const sha256 = std.crypto.hash.sha2.Sha256.hash;
 const Cursor = @import("encoding.zig");
 const ScriptExecContext = @import("stack.zig").ScriptExecutionContext;
-// const VM = @import("vm.zig");
-// const SCRIPT_ENABLE_MAY2025 = @import("vm.zig").SCRIPT_ENABLE_MAY2025;
-// const SCRIPT_VM_LIMITS_STANDARD = @import("vm.zig").SCRIPT_VM_LIMITS_STANDARD;
 pub const SigningSer = @This();
 
 tx: Transaction,
 outpoint: []Transaction.Output,
 idx: usize,
-/// using encodeWithPrecompute
+/// not used encodeWithPrecompute keeping for reference
 pub fn encode(
     ctx: *Transaction,
     src_outs: *[]Transaction.Output,
@@ -188,15 +185,6 @@ fn shouldSerializeNoOutputs(flagtype: u32) bool {
 fn shouldSerializeUtxos(flagtype: u32) bool {
     return match(flagtype, SigHashFlag.utxos);
 }
-// pub fn hashSequence(
-//     tx: *Transaction,
-//     writer: anytype,
-//     out: [32]u8,
-// ) !void {
-//     encodeSequence(tx, writer);
-//     _ = sha256(encoder.fbs.getWritten(), &hash_prev_out, .{});
-//     _ = sha256(&hash_prev_out, &hash_prev_out, .{});
-// }
 
 pub fn encodeInputs(tx: Transaction, writer: anytype) !usize {
     var len: usize = 0;

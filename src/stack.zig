@@ -207,9 +207,11 @@ pub const VirtualMachine = struct {
 
         const operation = getOperation(p);
         var control_stack = p.control_stack;
+
         if (control_stack.size > ConsensusBch2025.maximum_control_stack_depth) {
             return StackError.maximum_control_stack_depth;
         }
+
         const execution_state = control_stack.allTrue();
 
         // Skip disabled opcodes
@@ -228,8 +230,8 @@ pub const VirtualMachine = struct {
                     p.instruction_bytecode[p.instruction_pointer..],
                     p.allocator,
                 );
-                p.metrics.operations += 1;
-                p.metrics.tallyOp(May2025.OPCODE_COST);
+                // p.metrics.operations += 1;
+                // p.metrics.tallyOp(May2025.OPCODE_COST);
                 // If the control stack indicates that this block should not be executed,
                 // skip the push operation and advance the pointer.
                 p.instruction_pointer += push_data.bytes_read;
@@ -405,30 +407,6 @@ pub const ControlStack = struct {
     }
 };
 
-test "simple" {
-    // var genp_alloc = std.heap.GeneralPurposeAllocator(.{}){};
-    // const ally = genp_alloc.allocator();
-
-    // var code = [_]u8{ 0x51, 0x51, 0x93, 0x51, 0x93, 0x51, 0x93 };
-
-    // var script_exec = ScriptExecContext.init();
-    // const tx = Transaction.init();
-    // script_exec.tx = tx;
-    // var program = try Program.init(ally, &script_exec);
-    // var pgrm = try Program.init(instruction_funcs.items.ptr, &code, ally);
-    // try VirtualMachine.run(&program);
-    // std.debug.print("STACKPOST {any}\n", .{program.stack.slice()});
-}
-
-test "tag" {
-    // var it = std.mem.splitScalar(u8, name, "op_unknown");
-    // var it = std.mem.splitScalar(u8, name, "op_unknown");
-    // std.ascii.isDigit()
-    // std.debug.print("OP {s}", .{it.first()});
-    // while (it.next()) |op| {
-    //     std.debug.print("OP {s}", .{op});
-    // }
-}
 const std = @import("std");
 const BigInt = std.math.big.int.Managed;
 const Opcode = @import("opcodes.zig").Opcodes;

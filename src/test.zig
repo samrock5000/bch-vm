@@ -7,7 +7,6 @@ const ScriptExecutionContext = @import("stack.zig").ScriptExecutionContext;
 const SigningCache = @import("sigser.zig").SigningCache;
 const Program = @import("stack.zig").Program;
 const VirtualMachine = @import("stack.zig").VirtualMachine;
-const zbench = @import("zbench");
 
 test "vmbstandard" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -200,15 +199,21 @@ test "vmbstandard" {
             }
         }
     }
-    const total_execution_time = end_time - start_time;
+    const total_execution_time = end_time - start_time; // in nanoseconds
     const average_verification_time = if (verification_count > 0)
         @divTrunc(total_verification_time, @as(i128, @intCast(verification_count)))
     else
+        0; // in microseconds
+
+    const verification_rate = if (average_verification_time > 0)
+        @divTrunc(@as(i128, 1_000_000), average_verification_time) // convert microseconds to seconds
+    else
         0;
+
     std.debug.print("\nPerformance Statistics:\n" ++
         "Total Execution Time: {d} ns\n" ++
-        "Total Verification Time: {d} ns\n" ++
-        "Average Verification Time: {d} ns\n" ++
+        "Total Verification Time: {d} us\n" ++
+        "Average Verification Time: {d} us\n" ++
         "Number of Verifications: {d}\n" ++
         "Failed Verifications: {d}\n" ++
         "Verification Rate: {d} ops/sec\n", .{
@@ -217,8 +222,7 @@ test "vmbstandard" {
         average_verification_time,
         verification_count,
         failed_verifications,
-        0,
-        // @divTrunc(@as(i128, 1_000_000_000), average_verification_time),
+        verification_rate,
     });
 }
 
@@ -417,15 +421,21 @@ test "vmbinvalid " {
             }
         }
     }
-    const total_execution_time = end_time - start_time;
+    const total_execution_time = end_time - start_time; // in nanoseconds
     const average_verification_time = if (verification_count > 0)
         @divTrunc(total_verification_time, @as(i128, @intCast(verification_count)))
     else
+        0; // in microseconds
+
+    const verification_rate = if (average_verification_time > 0)
+        @divTrunc(@as(i128, 1_000_000), average_verification_time) // convert microseconds to seconds
+    else
         0;
+
     std.debug.print("\nPerformance Statistics:\n" ++
         "Total Execution Time: {d} ns\n" ++
-        "Total Verification Time: {d} ns\n" ++
-        "Average Verification Time: {d} ns\n" ++
+        "Total Verification Time: {d} us\n" ++
+        "Average Verification Time: {d} us\n" ++
         "Number of Verifications: {d}\n" ++
         "Failed Verifications: {d}\n" ++
         "Verification Rate: {d} ops/sec\n", .{
@@ -434,8 +444,7 @@ test "vmbinvalid " {
         average_verification_time,
         verification_count,
         failed_verifications,
-        0,
-        // @divTrunc(@as(i128, 1_000_000_000), average_verification_time),
+        verification_rate,
     });
 }
 test "constrolstack  basic" {
