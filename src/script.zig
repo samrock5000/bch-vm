@@ -313,3 +313,18 @@ pub fn isStandard(script: []u8, gpa: std.mem.Allocator) bool {
 
     return false;
 }
+
+test "num2bin" {
+    const starttime = std.time.microTimestamp();
+    for (0..10001) |i| {
+        var num = std.mem.toBytes(i);
+        var res = try scriptIntParse(&num, std.testing.allocator);
+        const x = try encodeScriptIntMininal(&res, std.testing.allocator);
+        if (i == 10000) {
+            std.debug.print("{any}\n", .{x});
+        }
+    }
+    const endtime = std.time.microTimestamp();
+    const time = endtime - starttime;
+    std.debug.print("RES {any}\n", .{time});
+}

@@ -133,17 +133,12 @@ pub const VirtualMachine = struct {
     pub fn advancePointer(p: *Program) void {
         p.instruction_pointer += 1;
     }
-    fn afterOperation(program: *Program) !void {
-        //TODO
-        _ = &program;
-    }
     fn pushOperation(program: *Program) !void {
         const ip = program.instruction_pointer;
         const push_res = try readPush(
             program.instruction_bytecode[ip..],
             program.allocator,
         );
-        // defer freePushResult(push_res, program.allocator);
         if (!isMinimalDataPush(
             program.instruction_bytecode[ip],
             push_res.data,
@@ -230,12 +225,9 @@ pub const VirtualMachine = struct {
                     p.instruction_bytecode[p.instruction_pointer..],
                     p.allocator,
                 );
-                // p.metrics.operations += 1;
-                // p.metrics.tallyOp(May2025.OPCODE_COST);
                 // If the control stack indicates that this block should not be executed,
                 // skip the push operation and advance the pointer.
                 p.instruction_pointer += push_data.bytes_read;
-                // advancePointer(p);
                 return try @call(.always_tail, executeProgram, .{p});
             } else {
                 p.metrics.operations += 1;

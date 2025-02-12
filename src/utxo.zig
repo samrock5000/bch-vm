@@ -1,3 +1,5 @@
+// This file is not used by the vm but `HashSet depends` on it. TODO Should remove.
+
 const std = @import("std");
 const Output = @import("transaction.zig").Output;
 const Input = @import("transaction.zig").Input;
@@ -384,6 +386,63 @@ pub fn decideChange(
         };
     }
 }
+pub fn generateRandUtxosMulti(
+    allocator: std.mem.Allocator,
+    n: usize,
+    random: std.Random,
+) !std.MultiArrayList(Utxo) {
+    var utxos = std.MultiArrayList(Utxo){};
+    errdefer {
+        for (utxos.items(.output)) |output| {
+            allocator.free(output.script);
+        }
+        utxos.deinit(allocator);
+    }
+
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        // Generate random txid
+        const txid: u256 = random.int(u256);
+
+        // Generate random script
+        const script_len = random.intRangeAtMost(u32, 25, 100);
+        const script_buffer = try allocator.alloc(u8, script_len);
+        defer allocator.free(script_buffer);
+        random.bytes(script_buffer);
+
+        // Make a separate allocation for this UTXO's script
+        const script_copy = try allocator.dupe(u8, script_buffer);
+        errdefer allocator.free(script_copy);
+
+        // Generate random index and amount
+        const index = random.intRangeAtMost(u32, 0, 10);
+        const amount = random.intRangeAtMost(u64, 546, 1000);
+        // std.debug.print("AMOUNT {}\n", .{amount});
+
+        // Create random output with its own script copy
+        const output = Output{
+            .satoshis = amount,
+            .script = script_copy,
+            .token = null,
+        };
+
+        // Create outpoint
+        const outpoint = Outpoint{
+            .txid = txid,
+            .index = index,
+        };
+
+        // Create Utxo
+        const utxo = Utxo{
+            .outpoint = outpoint,
+            .output = output,
+        };
+
+        try utxos.append(allocator, utxo);
+    }
+
+    return utxos;
+}
 
 pub fn generateRandomUtxos(
     allocator: std.mem.Allocator,
@@ -402,10 +461,9 @@ pub fn generateRandomUtxos(
     while (i < n) : (i += 1) {
         // Generate random txid
         const txid: u256 = random.int(u256);
-        // random.bytes(&txid);
 
         // Generate random script
-        const script_len = random.intRangeAtMost(u32, 0, 1000);
+        const script_len = random.intRangeAtMost(u32, 25, 100);
         const script_buffer = try allocator.alloc(u8, script_len);
         defer allocator.free(script_buffer);
         random.bytes(script_buffer);

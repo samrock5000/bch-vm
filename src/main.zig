@@ -6,7 +6,6 @@ const Program = @import("stack.zig").Program;
 const VirtualMachine = @import("stack.zig").VirtualMachine;
 const SigningCache = @import("sigser.zig").SigningCache;
 const ConsensusBch2025 = @import("consensus2025.zig").ConsensusBch2025.init();
-const ztracy = @import("ztracy");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

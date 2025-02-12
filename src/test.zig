@@ -8,7 +8,7 @@ const SigningCache = @import("sigser.zig").SigningCache;
 const Program = @import("stack.zig").Program;
 const VirtualMachine = @import("stack.zig").VirtualMachine;
 
-test "vmbstandard" {
+test "vmbstandard2025" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const ally = arena.allocator();
@@ -65,6 +65,8 @@ test "vmbstandard" {
     var failed_verifications: usize = 0;
     var total_verification_time: i128 = 0;
     var end_time: i128 = 0;
+    var max_duration: i128 = 0; // Variable to store the longest duration
+    var max_duration_id = [_]u8{ 0, 0, 0, 0, 0, 0 };
     // Process all collected test files
     for (test_files.items, 0..) |*test_file, i| {
         const json_data = test_file.parsed_data.value.array.items;
@@ -117,7 +119,7 @@ test "vmbstandard" {
 
                 var utxo_writer = Encoder.init(utxos_slice);
 
-                // std.debug.print("Testing {s}\nID {s}\n", .{ test_file.filename, identifier });
+                // std.debug.print("Testing {s}nID {s}n", .{ test_file.filename, identifier });
                 const utxos = Transaction.readOutputs(&utxo_writer, ally) catch |err| {
                     std.debug.print("ID {s}\n", .{identifier});
                     std.debug.print("UTXO decoding error {any}\n", .{err});
@@ -168,6 +170,14 @@ test "vmbstandard" {
                 }
 
                 verify_end = std.time.microTimestamp();
+                const current_duration = verify_end - verify_start;
+
+                // Update max_duration if the current duration is longer
+                if (current_duration > max_duration) {
+                    max_duration = current_duration;
+                    max_duration_id = identifier[0..max_duration_id.len].*;
+                }
+                // std.debug.print("ID {s} Duration {} ms\n", .{ identifier, verify_end - verify_start });
                 if (res) {
                     // std.debug.print("ID {s}\n", .{identifier});
                     // std.debug.print("Testing {s}\nID {s}\n", .{ test_file.filename, identifier });
@@ -210,6 +220,7 @@ test "vmbstandard" {
     else
         0;
 
+    std.debug.print("ID {s} Longest Duration {} ms\n", .{ max_duration_id, max_duration });
     std.debug.print("\nPerformance Statistics:\n" ++
         "Total Execution Time: {d} ns\n" ++
         "Total Verification Time: {d} us\n" ++
@@ -226,12 +237,11 @@ test "vmbstandard" {
     });
 }
 
-test "vmbinvalid " {
+test "vmbinvalid2025" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const ally = arena.allocator();
 
-    // const path = "bch_2025_standard";
     const path = "bch_2025_invalid";
     const base_url = try std.fmt.allocPrint(std.heap.page_allocator, "../vmb_tests/{s}", .{path});
 
@@ -249,8 +259,6 @@ test "vmbinvalid " {
         test_files.deinit();
     }
 
-    // var script_exec = ScriptExecContext.init();
-    // var program = try Program.init(ally, &script_exec);
     // Collect all test files first
     var dir_iterator = current_dir.iterate();
     while (try dir_iterator.next()) |entry| {
@@ -339,7 +347,7 @@ test "vmbinvalid " {
 
                 var utxo_writer = Encoder.init(utxos_slice);
 
-                // std.debug.print("Testing {s}\nID {s}\n", .{ test_file.filename, identifier });
+                // std.debug.print("Testing {s}nID {s}n", .{ test_file.filename, identifier });
                 const utxos = Transaction.readOutputs(&utxo_writer, ally) catch |err| {
                     std.debug.print("ID {s}\n", .{identifier});
                     std.debug.print("UTXO decoding error {any}\n", .{err});
@@ -526,15 +534,36 @@ test "constrolstack edge" {
     try std.testing.expect(stack.empty());
     try std.testing.expect(stack.allTrue());
 }
-test {
-    var stack = ControlStack.init();
-    for (0..1000) |i| {
-        if (i == 999) {
-            stack.push(false);
-        }
-    }
-    // stack.toggleTop();
-    // std.debug.print("STACK {}\n", .{stack.allTrue()});
-    // stack.toggleTop();
-    // std.debug.print("STACK {}\n", .{stack.allTrue()});
+test "soa" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const ally = arena.allocator();
+    const DefaultPrng = std.Random.DefaultPrng;
+    var seed: u64 = undefined;
+    std.crypto.random.bytes(std.mem.asBytes(&seed));
+    var prng = DefaultPrng.init(seed);
+    const randUtxo = @import("utxo.zig").generateRandomUtxos;
+    const randUtxoMulti = @import("utxo.zig").generateRandUtxosMulti;
+
+    var timer2 = try std.time.Timer.start();
+    _ = try randUtxoMulti(ally, 100_000 * 2, prng.random());
+    const time2 = timer2.read();
+    std.debug.print("Time 2 {any}\n", .{time2});
+
+    var timer = try std.time.Timer.start();
+    _ = try randUtxo(ally, 100_000 * 2, prng.random());
+    const time1 = timer.read();
+    std.debug.print("Time 1 {any}\n", .{time1});
+    timer.reset();
+
+    // var multi_all = std.MultiArrayList(@import("utxo.zig").Utxo){};
+
+    // for (utxos.items) |t| {
+    //     try multi_all.append(ally, t);
+    // }
+    // const sliced = multi_all.slice();
+    // const outpoints = sliced.items(.outpoint);
+    // for (outpoints) |o| {
+    //     std.debug.print("out {any}\n", .{o});
+    // }
 }
