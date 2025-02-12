@@ -1,5 +1,5 @@
 pub const CashToken = @This();
-const Cursor = @import("encoding.zig");
+const Encoder = @import("encoding.zig");
 const Output = @import("transaction.zig").Transaction.Output;
 const Transaction = @import("transaction.zig").Transaction;
 const std = @import("std");
@@ -41,7 +41,7 @@ pub const TokenValidationError = error{
 
 pub const TokenId = u256;
 
-pub const MAXIMUM_COMMITMENT_LENGTH: u8 = 40;
+pub const MAXIMUM_COMMITMENT_LENGTH: u8 = 80;
 pub const MAX_FUNGIBLE_TOKEN_AMOUNT = std.math.maxInt(i64);
 
 fn hasNFT(bitfield: u8) bool {
@@ -74,19 +74,18 @@ pub fn getCapabilityByte(bitfield: u8) u8 {
 pub const NonFungibleToken = struct {
     capability: u8,
     commitment: []u8,
-    pub fn decode(encoder: *Cursor, bitfield: u8) !NonFungibleToken {
-        // std.debug.print("HAS Comit {}", .{hasCommitmentLen(bitfield)});
+    pub fn decode(reader: anytype, bitfield: u8, alloc: std.mem.Allocator) !NonFungibleToken {
         return NonFungibleToken{
             .capability = bitfield,
             .commitment = if (hasCommitmentLen(bitfield))
-                try encoder.readCompactBytes()
+                try Encoder.readVarBytes(reader, alloc)
             else
                 &[_]u8{},
         };
     }
 };
 
-pub fn decode(encoder: *Cursor) !?CashToken {
+pub fn decode(encoder: *Encoder, allocator: std.mem.Allocator) !?CashToken {
     var reader = encoder.fbs.reader();
     // READ TOKEN PREFIX
     _ = try reader.readInt(u8, .little);
@@ -96,8 +95,8 @@ pub fn decode(encoder: *Cursor) !?CashToken {
     return CashToken{
         .id = id,
         .capability = bitfield,
-        .nft = try NonFungibleToken.decode(encoder, bitfield),
-        .amount = if (hasAmount(bitfield)) try encoder.readCompactUint() else 0, // readVarint()
+        .nft = try NonFungibleToken.decode(reader, bitfield, allocator),
+        .amount = if (hasAmount(bitfield)) try Encoder.readVarint(reader) else 0, // readVarint()
     };
 }
 pub fn encode(token: CashToken, writer: anytype) !usize {
@@ -109,13 +108,13 @@ pub fn encode(token: CashToken, writer: anytype) !usize {
     len += 32;
     if (token.nft) |nft| {
         if (hasCommitmentLen(token.capability)) {
-            len += try Cursor.writeVarBytes(writer, nft.commitment);
+            len += try Encoder.writeVarBytes(writer, nft.commitment);
         }
         if (hasAmount(nft.capability)) {
-            len += try Cursor.writeVarint(writer, token.amount);
+            len += try Encoder.writeVarint(writer, token.amount);
         }
     } else {
-        len += try Cursor.writeVarint(writer, token.amount);
+        len += try Encoder.writeVarint(writer, token.amount);
     }
     return len;
 }
@@ -124,11 +123,13 @@ pub const WrappedScript = struct {
     script: []u8,
 };
 pub fn decodeTokenScript(
-    encoder: *Cursor,
+    encoder: *Encoder,
+    alloc: std.mem.Allocator,
 ) !WrappedScript {
-    const script_len = try encoder.readCompactUint();
+    const reader = encoder.fbs.reader();
+    const script_len = try Encoder.readVarint(reader);
     const pos: usize = @intCast(try encoder.fbs.getPos());
-    const token = try CashToken.decode(encoder);
+    const token = try CashToken.decode(encoder, alloc);
     const post_pos: usize = @intCast(try encoder.fbs.getPos());
     const token_bytes_read = post_pos - pos;
     const lockscript = encoder.fbs.buffer[post_pos .. post_pos + (script_len - token_bytes_read)][0..];

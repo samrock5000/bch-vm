@@ -5,7 +5,8 @@ const ScriptExecutionContext = @import("stack.zig").ScriptExecutionContext;
 const Program = @import("stack.zig").Program;
 const VirtualMachine = @import("stack.zig").VirtualMachine;
 const SigningCache = @import("sigser.zig").SigningCache;
-const ConsensusBch2025 = @import("consensus2025.zig").ConsensusBch2025.init();
+const ConsensusBch2026 = @import("consensus2026.zig").ConsensusBch2026.init();
+const ztracy = @import("ztracy");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -123,7 +124,7 @@ pub fn main() !void {
                     .tx = tx_decoded,
                     .signing_cache = SigningCache.init(),
                 };
-                var sigser_buff = [_]u8{0} ** (ConsensusBch2025.maximum_standard_transaction_size * 2);
+                var sigser_buff = [_]u8{0} ** (ConsensusBch2026.maximum_standard_transaction_size * 2);
                 try script_exec.computeSigningCache(&sigser_buff);
 
                 var program = try Program.init(ally, &script_exec);
@@ -132,7 +133,7 @@ pub fn main() !void {
 
                 verify_start = std.time.microTimestamp();
                 const res = VirtualMachine.verify(&program) catch |err| {
-                    std.debug.print("verification err {any}", .{err});
+                    std.debug.print("verification err {any}\n", .{err});
                     failed_verifications += 1;
                     verification_count += 1;
                     std.debug.print("Metrics:\n" ++

@@ -517,8 +517,24 @@ test "CHECK SIGS MSG RAW" {
     var keys: [32]u8 = undefined;
     var sig_res: [64]u8 = undefined;
     const Scheme = schnorr.SchnorrBCH;
-    // var msg_hash: [32]u8 = undefined;
-    // sha256.hash(&MSG, &msg_hash, .{});
+    // Warmup phase
+    const warmup_iterations = 10;
+    for (0..warmup_iterations) |_| {
+        for (PRIV_KEYS, 0..) |k, i| {
+            _ = try std.fmt.hexToBytes(&keys, k);
+            const sk = try Scheme.SecretKey.fromBytes(keys);
+            const kp = try Scheme.KeyPair.fromSecretKey(sk);
+            const sig = try kp.schnorrSign(&MSG);
+            var verifier = try SchnorrBCH.Verifier.init(sig, kp.public_key);
+            verifier.update(&MSG);
+            try verifier.verify();
+            _ = try std.fmt.hexToBytes(&sig_res, SIGS[i]);
+            const x = std.mem.eql(u8, &sig_res, &sig.toBytes());
+            std.debug.assert(x);
+        }
+    }
+    // Capture the start time
+    const start_time = std.time.milliTimestamp();
 
     for (PRIV_KEYS, 0..) |k, i| {
         _ = try std.fmt.hexToBytes(&keys, k);
@@ -529,10 +545,17 @@ test "CHECK SIGS MSG RAW" {
         verifier.update(&MSG);
         try verifier.verify();
         _ = try std.fmt.hexToBytes(&sig_res, SIGS[i]);
-        // std.debug.print("{any}\n == {any}\n", .{ sig_res, sig.toBytes() });
         const x = std.mem.eql(u8, &sig_res, &sig.toBytes());
         std.debug.assert(x);
     }
+    // Capture the end time
+    const end_time = std.time.milliTimestamp();
+
+    // Calculate the total time taken
+    const total_time = end_time - start_time;
+
+    // Print the total time taken
+    std.debug.print("Total time taken: {} milliseconds\n", .{total_time});
 }
 
 test "SIGS MSG HASHED" {

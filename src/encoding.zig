@@ -8,10 +8,8 @@ pub fn init(data: []u8) Cursor {
         .fbs = std.io.fixedBufferStream(data),
     };
 }
-
 /// Reads a variable-length integer from a Reader
-pub fn readCompactUint(r: *Cursor) !usize {
-    var reader = r.fbs.reader();
+pub fn readVarint(reader: anytype) !usize {
     const first_byte = try reader.readInt(u8, .little);
     return switch (first_byte) {
         else => @intCast(first_byte),
@@ -22,17 +20,18 @@ pub fn readCompactUint(r: *Cursor) !usize {
 }
 
 /// Reads variable-length bytes from a Reader
-pub fn readCompactBytes(reader: *Cursor) ![]u8 {
-    const len = try readCompactUint(reader);
-    const buffer = reader.fbs.buffer[reader.fbs.pos..];
-    if (len > buffer.len) {
+pub fn readVarBytes(reader: anytype, allocator: std.mem.Allocator) ![]u8 {
+    const len = try readVarint(reader);
+    const buf = try allocator.alloc(u8, len);
+    // defer allocator.free(buf);
+    errdefer allocator.free(buf);
+
+    const bytes_read = try reader.read(buf);
+    if (bytes_read != len) {
         return error.EndOfStream;
     }
-    _ = try reader.fbs.seekBy(@intCast(len));
-
-    return buffer[0..len];
+    return buf;
 }
-
 /// Writes a variable-length integer to a Writer
 pub fn writeVarint(encoder: anytype, value: u64) !usize {
     if (value < 0xfd) {

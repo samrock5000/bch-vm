@@ -1,6 +1,6 @@
 const std = @import("std");
 const isPushOnly = @import("push.zig").isPushOnly;
-const ConsensusBch2025 = @import("consensus2025.zig").ConsensusBch2025.init();
+const ConsensusBch2026 = @import("consensus2026.zig").ConsensusBch2026.init();
 const BigInt = std.math.big.int.Managed;
 // Constants for script operations
 const OP_DUP: u8 = 0x76;
@@ -174,7 +174,7 @@ pub fn encodeScriptIntMininal(num: *BigInt, allocator: std.mem.Allocator) ![]u8 
     } else if (neg) {
         result.items[result.items.len - 1] |= 0x80;
     }
-    if (result.items.len > ConsensusBch2025.maximum_stack_item_length) {
+    if (result.items.len > ConsensusBch2026.maximum_stack_item_length) {
         return StackError.exceeded_max_bytecode_length;
     }
     return result.toOwnedSlice();

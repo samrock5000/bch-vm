@@ -1,5 +1,5 @@
 const ControlStack = @import("stack.zig").ControlStack;
-const ConsensusBch2025 = @import("consensus2025.zig").ConsensusBch2025.init();
+const ConsensusBch2026 = @import("consensus2026.zig").ConsensusBch2026.init();
 const std = @import("std");
 const Encoder = @import("encoding.zig").Cursor;
 const Transaction = @import("transaction.zig").Transaction;
@@ -8,12 +8,12 @@ const SigningCache = @import("sigser.zig").SigningCache;
 const Program = @import("stack.zig").Program;
 const VirtualMachine = @import("stack.zig").VirtualMachine;
 
-test "vmbstandard2025" {
+test "vmbstandard2026" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const ally = arena.allocator();
 
-    const path = "bch_2025_standard";
+    const path = "bch_2026_standard";
     const base_url = try std.fmt.allocPrint(std.heap.page_allocator, "../vmb_tests/{s}", .{path});
 
     var current_dir = try std.fs.cwd().openDir(base_url, .{ .iterate = true });
@@ -108,6 +108,7 @@ test "vmbstandard2025" {
                 var utxo_buff = std.ArrayList(u8).init(ally);
                 defer utxo_buff.deinit();
 
+                // std.debug.print("ID {s}\n", .{identifier});
                 const tx = item.array.items[4].string;
 
                 const input_index = if (item.array.items.len == 7) item.array.items[6].integer else 0;
@@ -119,7 +120,7 @@ test "vmbstandard2025" {
 
                 var utxo_writer = Encoder.init(utxos_slice);
 
-                // std.debug.print("Testing {s}nID {s}n", .{ test_file.filename, identifier });
+                // std.debug.print("Testing {s} ID {s}\nn", .{ test_file.filename, identifier });
                 const utxos = Transaction.readOutputs(&utxo_writer, ally) catch |err| {
                     std.debug.print("ID {s}\n", .{identifier});
                     std.debug.print("UTXO decoding error {any}\n", .{err});
@@ -145,7 +146,7 @@ test "vmbstandard2025" {
                     .tx = tx_decoded,
                     .signing_cache = SigningCache.init(),
                 };
-                var sigser_buff = [_]u8{0} ** (ConsensusBch2025.maximum_standard_transaction_size * 2);
+                var sigser_buff = [_]u8{0} ** (ConsensusBch2026.maximum_standard_transaction_size * 2);
                 try script_exec.computeSigningCache(&sigser_buff);
 
                 var program = try Program.init(ally, &script_exec);
@@ -179,7 +180,7 @@ test "vmbstandard2025" {
                 }
                 // std.debug.print("ID {s} Duration {} ms\n", .{ identifier, verify_end - verify_start });
                 if (res) {
-                    // std.debug.print("ID {s}\n", .{identifier});
+                    std.debug.print("ID {s}\n", .{identifier});
                     // std.debug.print("Testing {s}\nID {s}\n", .{ test_file.filename, identifier });
                     passed_count += 1;
                     verification_count += 1;
@@ -237,12 +238,13 @@ test "vmbstandard2025" {
     });
 }
 
-test "vmbinvalid2025" {
+test "vmbinvalid2026" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const ally = arena.allocator();
 
-    const path = "bch_2025_invalid";
+    // const path = "bch_2025_standard";
+    const path = "bch_2026_invalid";
     const base_url = try std.fmt.allocPrint(std.heap.page_allocator, "../vmb_tests/{s}", .{path});
 
     var current_dir = try std.fs.cwd().openDir(base_url, .{ .iterate = true });
@@ -259,6 +261,8 @@ test "vmbinvalid2025" {
         test_files.deinit();
     }
 
+    // var script_exec = ScriptExecContext.init();
+    // var program = try Program.init(ally, &script_exec);
     // Collect all test files first
     var dir_iterator = current_dir.iterate();
     while (try dir_iterator.next()) |entry| {
@@ -373,7 +377,7 @@ test "vmbinvalid2025" {
                     .tx = tx_decoded,
                     .signing_cache = SigningCache.init(),
                 };
-                var sigser_buff = [_]u8{0} ** (ConsensusBch2025.maximum_standard_transaction_size * 2);
+                var sigser_buff = [_]u8{0} ** (ConsensusBch2026.maximum_standard_transaction_size * 2);
                 try script_exec.computeSigningCache(&sigser_buff);
 
                 var program = try Program.init(ally, &script_exec);
@@ -399,7 +403,7 @@ test "vmbinvalid2025" {
 
                 verify_end = std.time.microTimestamp();
                 if (res) {
-                    // std.debug.print("ID {s}\n", .{identifier});
+                    std.debug.print("ID {s}\n", .{identifier});
                     // std.debug.print("Testing {s}\nID {s}\n", .{ test_file.filename, identifier });
                     passed_count += 1;
                     verification_count += 1;
@@ -534,36 +538,15 @@ test "constrolstack edge" {
     try std.testing.expect(stack.empty());
     try std.testing.expect(stack.allTrue());
 }
-test "soa" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const ally = arena.allocator();
-    const DefaultPrng = std.Random.DefaultPrng;
-    var seed: u64 = undefined;
-    std.crypto.random.bytes(std.mem.asBytes(&seed));
-    var prng = DefaultPrng.init(seed);
-    const randUtxo = @import("utxo.zig").generateRandomUtxos;
-    const randUtxoMulti = @import("utxo.zig").generateRandUtxosMulti;
-
-    var timer2 = try std.time.Timer.start();
-    _ = try randUtxoMulti(ally, 100_000 * 2, prng.random());
-    const time2 = timer2.read();
-    std.debug.print("Time 2 {any}\n", .{time2});
-
-    var timer = try std.time.Timer.start();
-    _ = try randUtxo(ally, 100_000 * 2, prng.random());
-    const time1 = timer.read();
-    std.debug.print("Time 1 {any}\n", .{time1});
-    timer.reset();
-
-    // var multi_all = std.MultiArrayList(@import("utxo.zig").Utxo){};
-
-    // for (utxos.items) |t| {
-    //     try multi_all.append(ally, t);
+test {
+    // var stack = ControlStack.init();
+    // for (0..1000) |i| {
+    //     if (i == 999) {
+    //         stack.push(false);
+    //     }
     // }
-    // const sliced = multi_all.slice();
-    // const outpoints = sliced.items(.outpoint);
-    // for (outpoints) |o| {
-    //     std.debug.print("out {any}\n", .{o});
-    // }
+    // stack.toggleTop();
+    // std.debug.print("STACK {}\n", .{stack.allTrue()});
+    // stack.toggleTop();
+    // std.debug.print("STACK {}\n", .{stack.allTrue()});
 }

@@ -356,8 +356,8 @@ test "checkminimal" {
     try std.testing.expect(isMinimalDataPush(0x4c, &[_]u8{ 0x01, 0x02 }) == false);
     try std.testing.expect(isMinimalDataPush(0x4c, &[_]u8{0} ** 255) == true);
 }
-// test "pushonly" {
-//     var bytecode = [_]u8{};
-//     const res = isPushOnly(&bytecode);
-//     std.debug.print("RES {}", .{res});
-// }
+test "endianess" {
+    const x = numberToBinUint32LE(0xffaa);
+    const y = std.mem.readInt(u32, &x, .little);
+    try std.testing.expectEqual(y, 0xffaa);
+}

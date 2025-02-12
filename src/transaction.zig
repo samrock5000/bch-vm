@@ -21,13 +21,12 @@ pub const Input = struct {
     index: u32,
     sequence: u32,
     script: []u8,
-    pub fn decode(encoder: *Cursor) !Input {
-        var reader = encoder.fbs.reader();
+    pub fn decode(encoder: anytype, allocator: Allocator) !Input {
         return Input{
-            .txid = try reader.readInt(u256, .big),
-            .index = try reader.readInt(u32, .little),
-            .script = try encoder.readCompactBytes(),
-            .sequence = try reader.readInt(u32, .little),
+            .txid = try encoder.readInt(u256, .big),
+            .index = try encoder.readInt(u32, .little),
+            .script = try Cursor.readVarBytes(encoder, allocator),
+            .sequence = try encoder.readInt(u32, .little),
         };
     }
     pub fn encode(self: Input, writer: anytype) !usize {
@@ -47,13 +46,12 @@ pub const Output = struct {
     script: []u8,
     satoshis: u64,
     token: ?CashToken,
-    pub fn decode(encoder: *Cursor) !Output {
-        // _ = &allocator;
+    pub fn decode(encoder: *Cursor, allocator: Allocator) !Output {
         const reader = encoder.fbs.reader();
         const sats = try reader.readInt(u64, .little);
         const seek_pos = encoder.fbs.pos;
         var has_token = false;
-        _ = try encoder.readCompactUint();
+        _ = try Cursor.readVarint(reader);
         if (try encoder.fbs.getPos() < try encoder.fbs.getEndPos()) {
             const prefix_byte = try reader.readByte();
             has_token = prefix_byte == CashToken.PREFIX_TOKEN;
@@ -61,7 +59,7 @@ pub const Output = struct {
         try encoder.fbs.seekTo(seek_pos);
         if (has_token) {
             const output_data =
-                try CashToken.decodeTokenScript(encoder);
+                try CashToken.decodeTokenScript(encoder, allocator);
             return Output{
                 .satoshis = sats,
                 .script = output_data.script,
@@ -70,7 +68,7 @@ pub const Output = struct {
         } else {
             return Output{
                 .satoshis = sats,
-                .script = try encoder.readCompactBytes(),
+                .script = try Cursor.readVarBytes(reader, allocator),
                 .token = null,
             };
         }
@@ -105,22 +103,24 @@ pub const Output = struct {
 
 /// Expects `Cursor` type
 pub fn readInputs(
-    encoder: *Cursor,
+    encoder: anytype,
     allocator: Allocator,
 ) ![]Input {
-    const inputs_len = try encoder.readCompactUint();
+    const reader = encoder.fbs.reader();
+    const inputs_len = try Cursor.readVarint(reader);
     const inputs = try allocator.alloc(Input, inputs_len);
     for (0..inputs_len) |i| {
-        inputs[i] = try Input.decode(encoder);
+        inputs[i] = try Input.decode(reader, allocator);
     }
     return inputs;
 }
 pub fn readOutputs(encoder: *Cursor, allocator: Allocator) ![]Output {
-    // const reader = encoder.fbs.reader();
-    const outputs_len = try encoder.readCompactUint();
+    const reader = encoder.fbs.reader();
+    const outputs_len = try Cursor.readVarint(reader);
     const outputs = try allocator.alloc(Output, outputs_len);
+    // var fbs = std.io.fixedBufferStream(outputs);
     for (0..outputs_len) |i| {
-        const output = try Output.decode(encoder);
+        const output = try Output.decode(encoder, allocator);
         outputs[i] = output;
     }
     return outputs;
@@ -245,7 +245,7 @@ pub fn calculateOutputsSize(outputs: []Output) usize {
         // Token field
         if (output.token) |token| {
             size += @sizeOf(u8); // prefix
-            size += getVarIntSize(output.token.?.amount); // amount
+            size += getVarIntSize(@intCast(output.token.?.amount)); // amount
             size += @sizeOf(u256); // id
             size += @sizeOf(u8); // capability
 

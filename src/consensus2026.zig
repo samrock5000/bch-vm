@@ -5,7 +5,7 @@ pub const MAX_COINS: u64 = 21_000_000;
 pub const SATOSHI_PER_COIN: u64 = 100_000_000;
 pub const MAX_MONEY: u64 = MAX_COINS * SATOSHI_PER_COIN;
 
-pub const ConsensusBch2025 = struct {
+pub const ConsensusBch2026 = struct {
     /// Base instruction cost
     base_instruction_cost: u32 = 100,
 
@@ -83,7 +83,7 @@ pub const ConsensusBch2025 = struct {
     signature_check_cost: u32 = 26_000,
 
     // Optional method to create a default instance
-    pub fn init() ConsensusBch2025 {
-        return ConsensusBch2025{};
+    pub fn init() ConsensusBch2026 {
+        return ConsensusBch2026{};
     }
 };

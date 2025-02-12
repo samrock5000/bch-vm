@@ -1,12 +1,12 @@
 /// `Stack` is a bounded array that holds `StackValue` elements, with a maximum capacity defined by
-/// `ConsensusBch2025.maximum_bytecode_length`. This type is used to represent the stack during the
+/// `ConsensusBch2026.maximum_bytecode_length`. This type is used to represent the stack during the
 /// execution of a script in a transaction. The stack is a fundamental data structure in script
 /// execution, used to store intermediate values, operands, and results of operations.
 ///
 /// The `Stack` type is implemented as a `std.BoundedArray`, which ensures that the stack cannot
 /// exceed the predefined maximum size, preventing potential memory overflows or excessive resource
 /// usage during script execution.
-const Stack = std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length);
+const Stack = std.BoundedArray(StackValue, ConsensusBch2026.maximum_bytecode_length);
 
 /// `StackValue` represents a single value on the stack. It is a struct that contains a byte slice
 /// (`bytes`), which holds the actual data of the stack value. The byte slice can represent various
@@ -18,7 +18,6 @@ const Stack = std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_len
 pub const StackValue = struct {
     bytes: []u8,
 };
-
 /// `ScriptExecutionContext` represents the execution context for a script in a transaction.
 /// It encapsulates all the necessary data and state required to execute and validate
 /// a script within the context of a specific transaction input. This includes:
@@ -64,15 +63,15 @@ pub const ScriptExecutionContext = struct {
 pub const Program = struct {
     /// The main stack used during script execution. This stack holds values that
     /// are manipulated by the script's instructions.
-    stack: std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length),
+    stack: std.BoundedArray(StackValue, ConsensusBch2026.maximum_bytecode_length),
 
     /// The alternate stack used during script execution. This stack is used for
     /// temporary storage of values that need to be preserved across operations.
-    alt_stack: std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length),
+    alt_stack: std.BoundedArray(StackValue, ConsensusBch2026.maximum_bytecode_length),
 
     /// The bytecode of the script being executed. This contains the instructions
     /// that define the script's logic.
-    instruction_bytecode: []u8,
+    instruction_bytecode: []const u8,
 
     /// The current position in the instruction bytecode. This is used to track
     /// which instruction is being executed.
@@ -80,7 +79,7 @@ pub const Program = struct {
 
     /// The position of the last `OP_CODESEPARATOR` instruction encountered.
     /// This is used to handle script segmentation during execution.
-    code_seperator: usize,
+    code_separator: usize,
 
     /// The allocator used for dynamic memory allocation during script execution.
     allocator: Allocator,
@@ -97,21 +96,23 @@ pub const Program = struct {
     /// This provides access to the transaction and UTXO data required for execution.
     context: *ScriptExecutionContext,
     pub fn init(
-        gpa: Allocator,
+        alloc: Allocator,
         context: *ScriptExecutionContext,
     ) !Program {
         return Program{
-            .stack = try std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length).init(0),
-            .alt_stack = try std.BoundedArray(StackValue, ConsensusBch2025.maximum_bytecode_length).init(0),
-            .control_stack = ControlStack.init(),
+            .stack = try std.BoundedArray(StackValue, ConsensusBch2026.maximum_bytecode_length).init(0),
+            .alt_stack = try std.BoundedArray(StackValue, ConsensusBch2026.maximum_bytecode_length).init(0),
+            .control_stack = ControlStack.init(alloc),
             .instruction_bytecode = undefined,
             .instruction_pointer = 0,
-            .code_seperator = 0,
-            .allocator = gpa,
+            .code_separator = 0,
+            .allocator = alloc,
             .context = context,
             .metrics = Metrics.init(),
-            // .has_error = null,
         };
+    }
+    pub fn deinit(self: *Program) void {
+        self.stack_frames.deinit();
     }
 };
 
@@ -133,6 +134,10 @@ pub const VirtualMachine = struct {
     pub fn advancePointer(p: *Program) void {
         p.instruction_pointer += 1;
     }
+    fn afterOperation(program: *Program) !void {
+        //TODO
+        _ = &program;
+    }
     fn pushOperation(program: *Program) !void {
         const ip = program.instruction_pointer;
         const push_res = try readPush(
@@ -151,15 +156,16 @@ pub const VirtualMachine = struct {
         const unlock_code = p.context.tx.inputs[p.context.input_index].script;
         const lock_code = p.context.utxo[p.context.input_index].script;
 
-        if (unlock_code.len > ConsensusBch2025.maximum_bytecode_length)
+        if (unlock_code.len > ConsensusBch2026.maximum_bytecode_length)
             return VerifyError.excessive_standard_unlocking_bytecode_length;
-        if (lock_code.len > ConsensusBch2025.maximum_bytecode_length)
+        if (lock_code.len > ConsensusBch2026.maximum_bytecode_length)
             return VerifyError.maximum_bytecode_length_lockscript;
         p.instruction_bytecode = unlock_code;
 
         // Unlocking eval
         _ = try executeProgram(p);
-        if (!p.control_stack.empty()) return VerifyError.non_empty_control_stack;
+        // std.debug.print("Unlock post {any}\n", .{p.stack.slice()});
+        if (!p.control_stack.empty()) return VerifyError.non_empty_control_stack_unlocking;
 
         var stack_clone = try std.BoundedArray(StackValue, 10_000).init(0);
         _ = try stack_clone.appendSlice(p.stack.slice());
@@ -169,9 +175,10 @@ pub const VirtualMachine = struct {
 
         // Locking eval
         _ = try executeProgram(p);
+        // std.debug.print("lock post {any}\n", .{p.stack.slice()});
         const lockscript_eval = readScriptBool(p.stack.get(p.stack.len - 1).bytes);
         if (!lockscript_eval) return VerifyError.non_truthy_stack_top_item_locking_eval;
-        if (!p.control_stack.empty()) return VerifyError.non_empty_control_stack;
+        if (!p.control_stack.empty()) return VerifyError.non_empty_control_stack_locking;
 
         const is_p2sh = Script.isP2SH(lock_code);
         if (!is_p2sh) {
@@ -190,52 +197,51 @@ pub const VirtualMachine = struct {
 
             // P2SH eval
             _ = try executeProgram(p);
-            if (!p.control_stack.empty()) return VerifyError.non_empty_control_stack;
+            // std.debug.print("p2sh post {any}\n", .{p.stack.slice()});
+            if (!p.control_stack.empty()) return VerifyError.non_empty_control_stack_redeem;
             if (p.stack.len != 1) {
                 return StackError.requires_clean_stack_redeem_bytecode;
             }
         }
     }
 
+    const tail = if (native_os == .wasi) .auto else .always_tail;
+
     pub fn executeProgram(p: *Program) !void {
         if (!hasMoreInstructions(p)) return;
-
-        const operation = getOperation(p);
+        const op_cost_exceeded = p.metrics.isOverOpCostLimit(true);
         var control_stack = p.control_stack;
-
-        if (control_stack.size > ConsensusBch2025.maximum_control_stack_depth) {
+        if (op_cost_exceeded) {
+            return VerifyError.operation_cost_exceeded;
+        }
+        if (control_stack.size() > ConsensusBch2026.maximum_control_stack_depth) {
             return StackError.maximum_control_stack_depth;
         }
-
         const execution_state = control_stack.allTrue();
+        const operation = getOperation(p);
+
+        // std.debug.print("{any}\n", .{operation});
 
         // Skip disabled opcodes
         if (operation.isDisabled()) {
             return StackError.disabled_opcode;
         }
-        // std.debug.print("OP {any}\n", .{operation});
-        // Handle push operations only if the control stack allows execution
+
+        // Handle push operations
         if (isPushOp(operation)) {
             if (!execution_state) {
-                if (operation == Opcode.op_reserved) {
-                    advancePointer(p);
-                    return try @call(.always_tail, executeProgram, .{p});
-                }
                 const push_data = try readPush(
                     p.instruction_bytecode[p.instruction_pointer..],
                     p.allocator,
                 );
-                // If the control stack indicates that this block should not be executed,
-                // skip the push operation and advance the pointer.
                 p.instruction_pointer += push_data.bytes_read;
-                return try @call(.always_tail, executeProgram, .{p});
+                return try @call(tail, executeProgram, .{p});
             } else {
                 p.metrics.operations += 1;
                 p.metrics.tallyOp(May2025.OPCODE_COST);
                 // Execute the push operation if the control stack allows it.
                 try pushOperation(p);
-                // advancePointer(p);
-                return try @call(.always_tail, executeProgram, .{p});
+                return try @call(tail, executeProgram, .{p});
             }
         }
 
@@ -245,11 +251,10 @@ pub const VirtualMachine = struct {
             advancePointer(p);
             p.metrics.operations += 1;
             p.metrics.tallyOp(May2025.OPCODE_COST);
-            return try @call(.always_tail, executeProgram, .{p});
+            return try @call(tail, executeProgram, .{p});
         } else {
-            // Skip non-conditional operations if the control stack indicates no execution.
             advancePointer(p);
-            return try @call(.always_tail, executeProgram, .{p});
+            return try @call(tail, executeProgram, .{p});
         }
     }
     pub fn verify(
@@ -270,10 +275,10 @@ pub const VirtualMachine = struct {
         var counting_writer = std.io.countingWriter(std.io.null_writer);
         _ = try context.tx.encode(counting_writer.writer());
 
-        if (counting_writer.bytes_written > ConsensusBch2025.maximum_transaction_length_bytes) {
+        if (counting_writer.bytes_written > ConsensusBch2026.maximum_transaction_length_bytes) {
             return VerifyError.max_tx_length_exceeded;
         }
-        if (counting_writer.bytes_written < ConsensusBch2025.minimum_transaction_length_bytes) {
+        if (counting_writer.bytes_written < ConsensusBch2026.minimum_transaction_length_bytes) {
             return VerifyError.minimun_transaction_length;
         }
 
@@ -289,23 +294,23 @@ pub const VirtualMachine = struct {
         if (output_value > input_value) {
             return VerifyError.output_value_exceeds_inputs_value;
         }
-        if (context.tx.version < ConsensusBch2025.minimum_consensus_version or
-            context.tx.version > ConsensusBch2025.maximum_consensus_version)
+        if (context.tx.version < ConsensusBch2026.minimum_consensus_version or
+            context.tx.version > ConsensusBch2026.maximum_consensus_version)
         {
             return VerifyError.invalid_version;
         }
         const standard = true;
         if (standard) {
-            if (counting_writer.bytes_written > ConsensusBch2025.maximum_standard_transaction_size) {
+            if (counting_writer.bytes_written > ConsensusBch2026.maximum_standard_transaction_size) {
                 return VerifyError.max_tx_standard_length_exceeded;
             }
             for (context.utxo) |ouput| {
-                if (!isStandard(ouput.script, program.allocator)) {
-                    return VerifyError.nonstandard_utxo_locking_bytecode;
+                if (ouput.script.len > ConsensusBch2026.maximum_operation_count) {
+                    return VerifyError.nonstandard_ouput_locking_bytecode;
                 }
             }
             for (context.tx.outputs) |ouput| {
-                if (!isStandard(ouput.script, program.allocator)) {
+                if (ouput.script.len > ConsensusBch2026.maximum_operation_count) {
                     return VerifyError.nonstandard_ouput_locking_bytecode;
                 }
             }
@@ -317,7 +322,7 @@ pub const VirtualMachine = struct {
             _ = try verifyTransactionTokens(context.tx, context.utxo, program.allocator);
 
             for (context.tx.inputs) |input| {
-                if (input.script.len > ConsensusBch2025.maximum_standard_unlocking_bytecode_length) {
+                if (input.script.len > ConsensusBch2026.maximum_standard_unlocking_bytecode_length) {
                     return VerifyError.excessive_standard_unlocking_bytecode_length;
                 }
             }
@@ -334,9 +339,9 @@ pub const VirtualMachine = struct {
         if (hash_iterations_exceeded) {
             return VerifyError.hashing_limit_exceeded;
         }
-        if (!program.control_stack.empty()) {
-            return VerifyError.non_empty_control_stack;
-        }
+        // if (!program.control_stack.empty()) {
+        //     return VerifyError.non_empty_control_stack;
+        // }
         const eval = readScriptBool(program.stack.get(program.stack.len - 1).bytes);
         return eval;
     }
@@ -348,62 +353,97 @@ pub const VirtualMachine = struct {
     pub fn hasMoreInstructions(p: *Program) bool {
         const ip = p.instruction_pointer;
         const len = p.instruction_bytecode.len;
-        return if (ip < len) true else false;
+        return ip < len;
     }
 };
+pub const ControlStackValue = union(enum) {
+    boolean: bool,
+    integer: usize,
+    frame: StackFrame,
+};
 
+pub const StackFrame = struct {
+    instruction_bytecode: []const u8,
+    instruction_pointer: usize,
+    code_separator: usize,
+};
 pub const ControlStack = struct {
-    size: usize,
-    first_false_pos: usize,
+    values: std.ArrayList(ControlStackValue),
+    allocator: Allocator,
 
-    const NO_FALSE: usize = std.math.maxInt(u32);
-
-    pub fn init() @This() {
+    pub fn init(allocator: Allocator) @This() {
         return ControlStack{
-            .size = 0,
-            .first_false_pos = NO_FALSE,
+            .values = std.ArrayList(ControlStackValue).init(allocator),
+            .allocator = allocator,
         };
     }
+
     pub fn empty(self: *ControlStack) bool {
-        return self.size == 0;
+        return self.values.items.len == 0;
     }
+
+    pub fn size(self: *ControlStack) usize {
+        return self.values.items.len;
+    }
+
     pub fn allTrue(self: *ControlStack) bool {
-        return self.first_false_pos == NO_FALSE;
-    }
-    pub fn push(self: *ControlStack, v: bool) void {
-        if (self.first_false_pos == NO_FALSE and !v) {
-            // The stack consists of all true values, and a false is added.
-            // The first false value will appear at the current size.
-            self.first_false_pos = self.size;
+        for (self.values.items) |value| {
+            if (value == .boolean and !value.boolean) {
+                return false;
+            }
         }
-        self.size += 1;
+        return true;
     }
-    pub fn pop(self: *ControlStack) void {
-        self.size -= 1;
-        if (self.first_false_pos == self.size) {
-            // When popping off the first false value, everything becomes true.
-            self.first_false_pos = NO_FALSE;
+
+    pub fn pushBool(self: *ControlStack, v: bool) !void {
+        try self.values.append(.{ .boolean = v });
+    }
+
+    pub fn pushInteger(self: *ControlStack, v: usize) !void {
+        try self.values.append(.{ .integer = v });
+    }
+
+    pub fn pushFrame(self: *ControlStack, frame: StackFrame) !void {
+        if (self.values.items.len >= ConsensusBch2026.maximum_control_stack_depth) {
+            return StackError.maximum_control_stack_depth;
         }
+        try self.values.append(.{ .frame = frame });
     }
+
+    pub fn pop(self: *ControlStack) ?ControlStackValue {
+        if (self.values.items.len == 0) return null;
+        return self.values.pop();
+    }
+
+    pub fn popFrame(self: *ControlStack) ?StackFrame {
+        if (self.values.items.len == 0) return null;
+
+        const value = self.values.pop();
+        return switch (value) {
+            .frame => |frame| frame,
+            else => null, // Invalid state; control stack should only contain frames here
+        };
+    }
+
     pub fn toggleTop(self: *ControlStack) void {
-        if (self.first_false_pos == NO_FALSE) {
-            // The current stack is all true values; the first false will be the top.
-            self.first_false_pos = self.size - 1;
-        } else if (self.first_false_pos == self.size - 1) {
-            // The top is the first false value; toggling it will make everything true.
-            self.first_false_pos = NO_FALSE;
-        } else {
-            // There is a false value, but not on top. No action is needed as toggling
-            // anything but the first false value is unobservable.
+        if (self.values.items.len == 0) return;
+
+        const top_index = self.values.items.len - 1;
+        const top_value = &self.values.items[top_index];
+
+        switch (top_value.*) {
+            .boolean => |*b| {
+                b.* = !b.*;
+            },
+            else => {}, // Only boolean values can be toggled
         }
     }
 };
-
 const std = @import("std");
 const BigInt = std.math.big.int.Managed;
 const Opcode = @import("opcodes.zig").Opcodes;
-const ConsensusBch2025 = @import("consensus2025.zig").ConsensusBch2025.init();
-const Consensus = @import("consensus2025.zig");
+const ConsensusBch2026 = @import("consensus2026.zig").ConsensusBch2026.init();
+const Consensus = @import("consensus2026.zig");
 // const Curosr = @import("encoding.zig").Cursor;
 const Allocator = std.mem.Allocator;
 const readScriptBool = @import("script.zig").readScriptBool;
@@ -424,3 +464,5 @@ const Instruction = @import("opfuncs.zig").Instruction;
 const opcodeToFuncTable = @import("opfuncs.zig").opcodeToFuncTable;
 const readPush = @import("push.zig").readPushData;
 const freePushResult = @import("push.zig").freePushResult;
+const builtin = @import("builtin");
+const native_os = builtin.os.tag;
