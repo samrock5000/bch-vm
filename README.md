@@ -8,7 +8,6 @@ Running on Zig 0.14.0-dev...
 ## cli app usage
 In/Validates  [Bitauth's vmb_tests 2025](https://github.com/bitauth/vmb_tests/). You should be in the *vmb_test* direcory when running the app.
 
-Running on Zig 0.14.0-dev...
 
 ```
 <identifier> <path>
