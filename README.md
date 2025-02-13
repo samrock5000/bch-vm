@@ -41,7 +41,8 @@ Prints:
 ```
 __Naive Performance statistics same as above:__
 
-## cli app debug usage
+check debugger branch
+## cli app debug usage 
 
 ```
 $ zig build -Dbuilder=debug
