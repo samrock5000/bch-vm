@@ -69,7 +69,7 @@ op cost: 4588\
 hash iterations: 30\
 Over operation limit: false\
 Over hash limit: false\
-Composite op cost: 192348
+Composite op cost: 192348\
 Press Enter to continue...
 *****************************************
 
