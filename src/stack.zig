@@ -187,7 +187,7 @@ pub const VirtualMachine = struct {
             }
         }
         if (is_p2sh) {
-            p.instruction_bytecode = if (stack_clone.popOrNull()) |p2sh_stack|
+            p.instruction_bytecode = if (stack_clone.pop()) |p2sh_stack|
                 p2sh_stack.bytes
             else
                 &[_]u8{};
@@ -467,7 +467,7 @@ pub const ControlStack = struct {
     pub fn popFrame(self: *ControlStack) ?StackFrame {
         if (self.values.items.len == 0) return null;
 
-        const value = self.values.pop();
+        const value = self.values.pop().?;
         return switch (value) {
             .frame => |frame| frame,
             else => null, // Invalid state; control stack should only contain frames here

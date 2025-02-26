@@ -1,28 +1,3 @@
-const Program = @import("stack.zig").Program;
-const Encoder = @import("encoding.zig").Cursor;
-const Transaction = @import("transaction.zig").Transaction;
-const validSigHashType = @import("sigser.zig").validSigHashType;
-const ripemd160 = @import("ripemd160.zig");
-const scriptIntParse = @import("script.zig").scriptIntParse;
-const scriptIntParseI64 = @import("script.zig").scriptIntParseI64;
-const Token = @import("token.zig");
-const encodeScriptIntMininal = @import("script.zig").encodeScriptIntMininal;
-const readScriptInt = @import("script.zig").readScriptInt;
-const readScriptBool = @import("script.zig").readScriptBool;
-const readScriptIntI64 = @import("script.zig").readScriptIntI64;
-const readPush = @import("push.zig").readPushData;
-const BigInt = std.math.big.int.Managed;
-const std = @import("std");
-const StackValue = @import("stack.zig").StackValue;
-const ScriptExecContext = @import("stack.zig").ScriptExecutionContext;
-const Ecdsa = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256oSha256;
-const EcdsaDataSig = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256;
-const Schnorr = @import("schnorr.zig").SchnorrBCH;
-const SigSer = @import("sigser.zig").SigningSer;
-const sha256 = std.crypto.hash.sha2.Sha256.hash;
-const ConsensusBch2025 = @import("consensus2025.zig").ConsensusBch2025.init();
-const Consensus = @import("consensus2025.zig");
-
 pub const Instruction = *const fn (program: *Program) anyerror!void;
 
 pub const opcodeToFuncTable = [256]Instruction{
@@ -124,11 +99,11 @@ pub const opcodeToFuncTable = [256]Instruction{
     &op_15,
     &op_16,
     &op_nop,
-    &op_ver,
+    &op_eval,
     &op_if,
     &op_notif,
-    &op_verif,
-    &op_vernotif,
+    &op_begin,
+    &op_until,
     &op_else,
     &op_endif,
     &op_verify,
@@ -699,7 +674,7 @@ pub fn op_if(program: *Program) anyerror!void {
     }
     _ = program.stack.pop();
 
-    program.control_stack.push(b);
+    try program.control_stack.pushBool(b);
     // std.debug.print("control stack  {} {any}\n", .{ program.control_stack.size, program.stack.slice() });
 }
 
@@ -716,31 +691,101 @@ pub fn op_notif(program: *Program) anyerror!void {
     }
     _ = program.stack.pop();
 
-    program.control_stack.push(b);
+    try program.control_stack.pushBool(b);
+}
+pub fn op_eval(program: *Program) !void {
+    const execution_state = program.control_stack.allTrue();
+    if (execution_state) {
+        if (program.stack.len == 0) {
+            return error.empty_stack;
+        }
+
+        const bytecode = program.stack.pop().?.bytes;
+
+        // Check for malformed bytecode (e.g., incomplete push operations)
+        // if (!isValidBytecode(bytecode)) {
+        //     return error.malformed_bytecode;
+        // }
+
+        const stack_frame = StackFrame{
+            .instruction_bytecode = program.instruction_bytecode,
+            .instruction_pointer = program.instruction_pointer,
+            .code_separator = program.code_separator,
+        };
+        try program.control_stack.pushFrame(stack_frame);
+
+        // std.debug.print("EVAL FRAME {any}\n", .{bytecode});
+        program.instruction_bytecode = bytecode;
+        program.instruction_pointer = 0;
+        program.code_separator = 0;
+
+        try VirtualMachine.executeProgram(program);
+        if (program.control_stack.values.getLast() == .frame) {
+            const frame = program.control_stack.popFrame() orelse return error.control_stack_corrupted;
+            program.instruction_bytecode = frame.instruction_bytecode;
+            program.instruction_pointer = frame.instruction_pointer;
+            program.code_separator = frame.code_separator;
+        }
+    }
 }
 
-pub fn op_verif(program: *Program) anyerror!void {
-    _ = program;
-    return error.DisabledOpcode;
+pub fn op_begin(program: *Program) anyerror!void {
+    var control_stack = program.control_stack;
+    const execution_state = control_stack.allTrue();
+    if (execution_state) {
+        try program.control_stack.pushInteger(program.instruction_pointer);
+    } else {
+        try control_stack.pushBool(false);
+    }
 }
 
-pub fn op_vernotif(program: *Program) anyerror!void {
-    _ = program;
-    return error.DisabledOpcode;
+pub fn op_until(program: *Program) anyerror!void {
+    var control_stack = &program.control_stack;
+    const execution_state = control_stack.allTrue();
+
+    // Pop the top item from the control stack
+    const top_value = control_stack.pop() orelse return error.control_stack_underflow;
+    if (top_value != .integer) {
+        return error.unexpected_until;
+    }
+    if (!execution_state) {
+        if (!top_value.boolean) {
+            return;
+        } else {
+            return error.unexpected_until_missing_endif;
+        }
+    }
+
+    // Ensure the top value is an integer (as per the specification)
+    const begin_ip = switch (top_value) {
+        .integer => |ip| ip,
+        else => return error.invalid_control_stack_value, // Error if not an integer
+    };
+
+    // Pop the top value from the stack to check if it's 0 (similar to OP_NOTIF)
+    const stack_value = program.stack.pop().?.bytes;
+    const value = readScriptBool(stack_value); // Convert stack value to an integer
+
+    // If the value is 0, jump back to the instruction pointer stored in the control stack
+    if (value) {
+        // program.instruction_pointer = begin_ip;
+        return;
+    }
+    program.instruction_pointer = begin_ip - 1;
 }
 
 pub fn op_else(program: *Program) anyerror!void {
-    if (program.control_stack.empty()) {
-        return error.unbalanced_stack;
+    if (program.control_stack.values.getLast() != .boolean) {
+        return error.unexpected_else;
     }
     program.control_stack.toggleTop();
 }
 
 pub fn op_endif(program: *Program) anyerror!void {
-    if (program.control_stack.empty()) {
-        return error.unbalanced_stack;
+    if (program.control_stack.values.getLast() != .boolean) {
+        return error.unexpected_endif;
     }
-    program.control_stack.pop();
+    _ = program.control_stack.pop();
 }
 
 pub fn op_verify(program: *Program) anyerror!void {
@@ -767,14 +812,14 @@ pub fn op_toaltstack(program: *Program) anyerror!void {
     if (program.stack.len < 1) {
         return error.read_empty_stack;
     }
-    try program.alt_stack.append(program.stack.pop());
+    try program.alt_stack.append(program.stack.pop().?);
 }
 
 pub fn op_fromaltstack(program: *Program) anyerror!void {
     if (program.alt_stack.len < 1) {
         return error.read_empty_stack;
     }
-    try program.stack.append(program.alt_stack.pop());
+    try program.stack.append(program.alt_stack.pop().?);
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
@@ -923,7 +968,7 @@ pub fn op_nip(program: *Program) anyerror!void {
 }
 
 pub fn op_over(program: *Program) anyerror!void {
-    if (program.stack.len < 4) {
+    if (program.stack.len < 2) {
         return error.read_empty_stack;
     }
     _ = try program.stack.append(program.stack.get(program.stack.len - 2));
@@ -1011,7 +1056,7 @@ pub fn op_cat(program: *Program) anyerror!void {
     const item1 = program.stack.get(program.stack.len - 2);
     const item2 = program.stack.get(program.stack.len - 1);
 
-    if (item1.bytes.len + item2.bytes.len > ConsensusBch2025.maximum_bytecode_length) {
+    if (item1.bytes.len + item2.bytes.len > ConsensusBch2026.maximum_bytecode_length) {
         return error.max_push_element;
     }
 
@@ -1056,7 +1101,7 @@ pub fn op_num2bin(program: *Program) anyerror!void {
     const num_size = program.stack.get(program.stack.len - 1);
     const size = try readScriptIntI64(num_size.bytes);
 
-    if (size > ConsensusBch2025.maximum_bytecode_length) {
+    if (size > ConsensusBch2026.maximum_bytecode_length) {
         return error.max_push_element;
     }
 
@@ -1212,8 +1257,8 @@ pub fn op_equalverify(program: *Program) anyerror!void {
     if (program.stack.len < 2) {
         return error.read_empty_stack;
     }
-    const item2 = program.stack.pop();
-    const item1 = program.stack.pop();
+    const item2 = program.stack.pop().?;
+    const item1 = program.stack.pop().?;
 
     const is_equal = std.mem.eql(u8, item1.bytes, item2.bytes);
     // Allocate  only if needed, and ensure it's always freed
@@ -1245,7 +1290,7 @@ pub fn op_1add(program: *Program) anyerror!void {
     _ = program.stack.pop();
     const val = try encodeScriptIntMininal(&script_num, program.allocator);
 
-    if (val.len > ConsensusBch2025.maximum_bytecode_length) {
+    if (val.len > ConsensusBch2026.maximum_bytecode_length) {
         return error.arithmetic_operation_exceeds_vm_limits_range;
     }
     const res = try program.allocator.dupe(u8, val);
@@ -1265,7 +1310,7 @@ pub fn op_1sub(program: *Program) anyerror!void {
     _ = program.stack.pop();
     const val = try encodeScriptIntMininal(&script_num, program.allocator);
 
-    if (val.len > ConsensusBch2025.maximum_bytecode_length) {
+    if (val.len > ConsensusBch2026.maximum_bytecode_length) {
         return error.arithmetic_operation_exceeds_vm_limits_range;
     }
     const res = try program.allocator.dupe(u8, val);
@@ -1295,7 +1340,7 @@ pub fn op_negate(program: *Program) anyerror!void {
     _ = program.stack.pop();
     const val = try encodeScriptIntMininal(&script_num, program.allocator);
 
-    if (val.len > ConsensusBch2025.maximum_bytecode_length) {
+    if (val.len > ConsensusBch2026.maximum_bytecode_length) {
         return error.arithmetic_operation_exceeds_vm_limits_range;
     }
     const res = try program.allocator.dupe(u8, val);
@@ -1316,7 +1361,7 @@ pub fn op_abs(program: *Program) anyerror!void {
     _ = program.stack.pop();
     const val = try encodeScriptIntMininal(&script_num, program.allocator);
 
-    if (val.len > ConsensusBch2025.maximum_bytecode_length) {
+    if (val.len > ConsensusBch2026.maximum_bytecode_length) {
         return error.arithmetic_operation_exceeds_vm_limits_range;
     }
     const res = try program.allocator.dupe(u8, val);
@@ -1329,13 +1374,13 @@ pub fn op_not(program: *Program) anyerror!void {
         return error.read_empty_stack;
     }
     const push_cost_factor = 1;
-    const item = program.stack.pop();
+    const item = program.stack.pop().?;
     var script_num = try readScriptInt(item.bytes, program.allocator);
     _ = try script_num.set(@intFromBool(script_num.eqlZero()));
 
     const val = try encodeScriptIntMininal(&script_num, program.allocator);
 
-    if (val.len > ConsensusBch2025.maximum_bytecode_length) {
+    if (val.len > ConsensusBch2026.maximum_bytecode_length) {
         return error.arithmetic_operation_exceeds_vm_limits_range;
     }
     const res = try program.allocator.dupe(u8, val);
@@ -1355,7 +1400,7 @@ pub fn op_0notequal(program: *Program) anyerror!void {
     _ = program.stack.pop();
     const val = try encodeScriptIntMininal(&script_num, program.allocator);
 
-    if (val.len > ConsensusBch2025.maximum_bytecode_length) {
+    if (val.len > ConsensusBch2026.maximum_bytecode_length) {
         return error.arithmetic_operation_exceeds_vm_limits_range;
     }
     const res = try program.allocator.dupe(u8, val);
@@ -1400,7 +1445,7 @@ pub fn op_sub(program: *Program) anyerror!void {
     _ = program.stack.pop();
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
-    if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
+    if (minimally_encoded.len > ConsensusBch2026.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
     program.metrics.tallyOp(quadratic_op_cost);
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
@@ -1423,7 +1468,7 @@ pub fn op_mul(program: *Program) anyerror!void {
     _ = program.stack.pop();
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
-    if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
+    if (minimally_encoded.len > ConsensusBch2026.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
     program.metrics.tallyOp(quadratic_op_cost);
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
@@ -1457,7 +1502,7 @@ pub fn op_div(program: *Program) anyerror!void {
     _ = program.stack.pop();
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
-    if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
+    if (minimally_encoded.len > ConsensusBch2026.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
     program.metrics.tallyOp(quadratic_op_cost);
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
@@ -1491,7 +1536,7 @@ pub fn op_mod(program: *Program) anyerror!void {
     _ = program.stack.pop();
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
-    if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
+    if (minimally_encoded.len > ConsensusBch2026.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
     program.metrics.tallyOp(quadratic_op_cost);
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
@@ -1526,7 +1571,7 @@ pub fn op_booland(program: *Program) anyerror!void {
     _ = program.stack.pop();
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
-    if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
+    if (minimally_encoded.len > ConsensusBch2026.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
     program.metrics.tallyOp(quadratic_op_cost);
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
@@ -1551,7 +1596,7 @@ pub fn op_boolor(program: *Program) anyerror!void {
     _ = program.stack.pop();
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
-    if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
+    if (minimally_encoded.len > ConsensusBch2026.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
     program.metrics.tallyOp(quadratic_op_cost);
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
@@ -1576,7 +1621,7 @@ pub fn op_numequal(program: *Program) anyerror!void {
     _ = program.stack.pop();
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
-    if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
+    if (minimally_encoded.len > ConsensusBch2026.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
     program.metrics.tallyOp(quadratic_op_cost);
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
@@ -1623,7 +1668,7 @@ pub fn op_numnotequal(program: *Program) anyerror!void {
     _ = program.stack.pop();
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
-    if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
+    if (minimally_encoded.len > ConsensusBch2026.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
     program.metrics.tallyOp(quadratic_op_cost);
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
@@ -1648,7 +1693,7 @@ pub fn op_lessthan(program: *Program) anyerror!void {
     _ = program.stack.pop();
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
-    if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
+    if (minimally_encoded.len > ConsensusBch2026.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
     program.metrics.tallyOp(quadratic_op_cost);
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
@@ -1673,7 +1718,7 @@ pub fn op_greaterthan(program: *Program) anyerror!void {
     _ = program.stack.pop();
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
-    if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
+    if (minimally_encoded.len > ConsensusBch2026.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
     program.metrics.tallyOp(quadratic_op_cost);
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
@@ -1698,7 +1743,7 @@ pub fn op_lessthanorequal(program: *Program) anyerror!void {
     _ = program.stack.pop();
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
-    if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
+    if (minimally_encoded.len > ConsensusBch2026.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
     program.metrics.tallyOp(quadratic_op_cost);
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
@@ -1728,7 +1773,7 @@ pub fn op_greaterthanorequal(program: *Program) anyerror!void {
     _ = program.stack.pop();
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
-    if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
+    if (minimally_encoded.len > ConsensusBch2026.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
     program.metrics.tallyOp(quadratic_op_cost);
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
@@ -1753,7 +1798,7 @@ pub fn op_min(program: *Program) anyerror!void {
     _ = program.stack.pop();
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
-    if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
+    if (minimally_encoded.len > ConsensusBch2026.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
     program.metrics.tallyOp(quadratic_op_cost);
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
@@ -1768,17 +1813,14 @@ pub fn op_max(program: *Program) anyerror!void {
 
     const item_lhs = program.stack.get(program.stack.len - 2);
     const item_rhs = program.stack.get(program.stack.len - 1);
-    // std.debug.print("ADD {any} {any}\n", .{ item_lhs.bytes.len, item_rhs.bytes.len });
     var int_l = try readScriptInt(item_lhs.bytes, program.allocator);
     const int_r = try readScriptInt(item_rhs.bytes, program.allocator);
     var res = if (int_l.order(int_r).compare(.gt)) int_l else int_r;
     int_l.swap(&res);
-    // quadratic_op_cost = @intCast(item_lhs.bytes.len * item_rhs.bytes.len);
-    // push_cost_factor = 2;
     _ = program.stack.pop();
     _ = program.stack.pop();
     const minimally_encoded = try encodeScriptIntMininal(&int_l, program.allocator);
-    if (minimally_encoded.len > ConsensusBch2025.maximum_stack_item_length) return error.max_push_element;
+    if (minimally_encoded.len > ConsensusBch2026.maximum_stack_item_length) return error.max_push_element;
     try program.stack.append(StackValue{ .bytes = minimally_encoded });
     program.metrics.tallyOp(quadratic_op_cost);
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len * push_cost_factor));
@@ -1812,7 +1854,7 @@ pub fn op_ripemd160(program: *Program) anyerror!void {
     if (program.stack.len < 1) {
         return error.read_empty_stack;
     }
-    const item = program.stack.pop();
+    const item = program.stack.pop().?;
     var buff = try program.allocator.alloc(u8, 32);
     const is_two_rounds = false;
     const hash_len: usize = 20;
@@ -1826,7 +1868,7 @@ pub fn op_sha1(program: *Program) anyerror!void {
     if (program.stack.len < 1) {
         return error.read_empty_stack;
     }
-    const item = program.stack.pop();
+    const item = program.stack.pop().?;
     var buff = try program.allocator.alloc(u8, 32);
     const is_two_rounds = false;
     const hash_len: usize = 20;
@@ -1840,7 +1882,7 @@ pub fn op_sha256(program: *Program) anyerror!void {
     if (program.stack.len < 1) {
         return error.read_empty_stack;
     }
-    const item = program.stack.pop();
+    const item = program.stack.pop().?;
     var buff = try program.allocator.alloc(u8, 32);
     const is_two_rounds = false;
     const hash_len = 32;
@@ -1854,7 +1896,7 @@ pub fn op_hash160(program: *Program) anyerror!void {
     if (program.stack.len < 1) {
         return error.read_empty_stack;
     }
-    const item = program.stack.pop();
+    const item = program.stack.pop().?;
     var buff = try program.allocator.alloc(u8, 32);
     const is_two_rounds = true;
     const hash_len: usize = 20;
@@ -1869,7 +1911,7 @@ pub fn op_hash256(program: *Program) anyerror!void {
     if (program.stack.len < 1) {
         return error.read_empty_stack;
     }
-    const item = program.stack.pop();
+    const item = program.stack.pop().?;
     var buff = try program.allocator.alloc(u8, 32);
     const is_two_rounds = true;
     const hash_len: usize = 32;
@@ -1881,7 +1923,7 @@ pub fn op_hash256(program: *Program) anyerror!void {
     program.metrics.tallyHashOp(@intCast(item.bytes.len), is_two_rounds);
 }
 pub fn op_codeseparator(program: *Program) anyerror!void {
-    program.code_seperator = program.instruction_pointer + 1;
+    program.code_separator = program.instruction_pointer + 1;
     // if (!stateContinue(pc, program)) return;
 }
 
@@ -1903,11 +1945,8 @@ pub fn op_checksig(program: *Program) anyerror!void {
         &bytes_hashed,
         program.allocator,
     );
-    // std.debug.print("VALID SIG {any}\n", .{is_valid_sig});
     program.metrics.tallySigChecks(1);
-    // if (bytes_hashed > 0) {
     program.metrics.tallyHashOp(@intCast(bytes_hashed), true);
-    // }
 
     _ = program.stack.pop();
     _ = program.stack.pop();
@@ -1916,19 +1955,7 @@ pub fn op_checksig(program: *Program) anyerror!void {
     const res = try program.allocator.dupe(u8, val);
     try program.stack.append(StackValue{ .bytes = res });
 
-    // if (@as(Opcode, @enumFromInt(code[ip])) == .op_checksigverify) {
-    //     //     std.debug.print("op_checksigverify {any}\n", .{is_valid_sig});
-    //     _ = stack.pop();
-    //     if (!is_valid_sig) {
-    //         return ErrorSet.verify;
-    //     }
-    // }
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
-    // if (!stateContinue(pc, program)) return;
-    // try @call(.always_tail, InstructionFuncs.lookup(@as(
-    //     Opcode,
-    //     @enumFromInt(program.instruction_bytecode[program.instruction_pointer]),
-    // )), .{ pc + 1, program });
 }
 
 pub fn op_checksigverify(program: *Program) anyerror!void {
@@ -1937,9 +1964,7 @@ pub fn op_checksigverify(program: *Program) anyerror!void {
     }
     var bytes_hashed: usize = 0;
     const sig = program.stack.get(program.stack.len - 2);
-    // std.debug.print("SIGNATURE {any}\n", .{sig.bytes});
     const publickey = program.stack.get(program.stack.len - 1);
-    // std.debug.print("PUBKEY {any}\n", .{publickey.bytes});
     const is_valid_sig = try checkSig(
         program.context,
         sig.bytes,
@@ -1948,12 +1973,8 @@ pub fn op_checksigverify(program: *Program) anyerror!void {
         &bytes_hashed,
         program.allocator,
     );
-    // std.debug.print("VALID SIG {any}\n", .{is_valid_sig});
     program.metrics.tallySigChecks(1);
-    // if (bytes_hashed > 0) {
     program.metrics.tallyHashOp(@intCast(bytes_hashed), true);
-    // }
-
     if (!is_valid_sig) {
         return error.verify;
     }
@@ -1973,7 +1994,7 @@ pub fn op_checkmultisig(program: *Program) anyerror!void {
     const num_pubkeys = try n.to(u64);
 
     if (num_pubkeys < 0 or num_pubkeys > Consensus.MAX_PUBKEYS_MULTISIG) {
-        return error.max_publey_mulsig;
+        return error.max_pubkey_mulsig;
     }
 
     // First pushed pubkey is num_pubkeys positions before N
@@ -2296,7 +2317,7 @@ pub fn op_inputindex(program: *Program) anyerror!void {
 }
 
 pub fn op_activebytecode(program: *Program) anyerror!void {
-    const code = program.instruction_bytecode[program.code_seperator..][0..];
+    const code = program.instruction_bytecode[program.code_separator..][0..];
     const copy = try program.allocator.dupe(u8, code);
     try program.stack.append(StackValue{ .bytes = copy });
 
@@ -3087,14 +3108,11 @@ pub fn checkSig(
         &context.signing_cache,
     );
 
-    // std.debug.print("SIG SER {any}\n", .{sigser_writer.fbs.getWritten()});
-    // std.debug.print("SIG SER len {any}\n", .{sigser_writer.fbs.getWritten().len});
     var sighash = try std.ArrayList(u8).initCapacity(alloc, 32);
     defer sighash.deinit();
     try sighash.resize(32);
     _ = sha256(sigser_writer.fbs.getWritten(), sighash.items[0..32], .{});
     _ = sha256(sighash.items[0..32], sighash.items[0..32], .{});
-    // std.debug.print("MSG HASH {any}\n", .{sighash});
 
     if ((sig.len > 65)) {
         const publickey = try Ecdsa.PublicKey.fromSec1(pubkey);
@@ -3107,13 +3125,11 @@ pub fn checkSig(
             return false;
         };
     } else {
-        // std.debug.print("SIG SER {any}\n", .{pubkey});
         const publickey = try Schnorr.PublicKey.fromSec1(pubkey);
         var signature = Schnorr.Signature.fromBytes(sig[0..64].*);
 
         var verifier = try signature.verifier(publickey);
         _ = verifier.verifyMessageHash(sighash.items[0..32].*) catch |err| {
-            // std.debug.print("SIG VERIFT ERR {any}\n", .{err});
             _ = &err;
             return false;
         };
@@ -3140,3 +3156,31 @@ fn decodeBitfield(vch: []const u8, size: u32, bitfield: *u32) anyerror!bool {
 
     return true;
 }
+
+const Program = @import("stack.zig").Program;
+const Encoder = @import("encoding.zig").Cursor;
+const Transaction = @import("transaction.zig").Transaction;
+const VirtualMachine = @import("stack.zig").VirtualMachine;
+const validSigHashType = @import("sigser.zig").validSigHashType;
+const ripemd160 = @import("ripemd160.zig");
+const scriptIntParse = @import("script.zig").scriptIntParse;
+const scriptIntParseI64 = @import("script.zig").scriptIntParseI64;
+const Token = @import("token.zig");
+const encodeScriptIntMininal = @import("script.zig").encodeScriptIntMininal;
+const readScriptInt = @import("script.zig").readScriptInt;
+const readScriptBool = @import("script.zig").readScriptBool;
+const readScriptIntI64 = @import("script.zig").readScriptIntI64;
+const readPush = @import("push.zig").readPushData;
+const BigInt = std.math.big.int.Managed;
+const std = @import("std");
+const StackValue = @import("stack.zig").StackValue;
+const ScriptExecContext = @import("stack.zig").ScriptExecutionContext;
+const Ecdsa = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256oSha256;
+const EcdsaDataSig = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256;
+const Schnorr = @import("schnorr.zig").SchnorrBCH;
+const SigSer = @import("sigser.zig").SigningSer;
+const sha256 = std.crypto.hash.sha2.Sha256.hash;
+const ConsensusBch2026 = @import("consensus2026.zig").ConsensusBch2026.init();
+const Consensus = @import("consensus2026.zig");
+const StackFrame = @import("stack.zig").StackFrame;
+const ControlStackValue = @import("stack.zig").ControlStackValue;

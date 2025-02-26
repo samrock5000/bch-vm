@@ -1,9 +1,5 @@
 pub const VerifyError = error{
     invalid_token_data,
-    non_empty_control_stack_locking,
-    non_empty_control_stack_unlocking,
-
-    non_empty_control_stack_redeem,
     invalid_version,
     excessive_standard_unlocking_bytecode_length,
     no_inputs,
@@ -21,7 +17,9 @@ pub const VerifyError = error{
     non_truthy_stack_top_item_locking_eval,
     operation_cost_exceeded,
     hashing_limit_exceeded,
-    non_empty_control_stack,
+    non_empty_control_stack_unlocking,
+    non_empty_control_stack_locking,
+    non_empty_control_stack_redeem,
     invalid_sighash_type,
     non_null_signature_failure,
     empty_stack_on_lockscript_eval,
