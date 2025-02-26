@@ -180,7 +180,7 @@ pub const VirtualMachine = struct {
             }
         }
         if (is_p2sh) {
-            p.instruction_bytecode = if (stack_clone.popOrNull()) |p2sh_stack|
+            p.instruction_bytecode = if (stack_clone.pop()) |p2sh_stack|
                 p2sh_stack.bytes
             else
                 &[_]u8{};

@@ -767,14 +767,14 @@ pub fn op_toaltstack(program: *Program) anyerror!void {
     if (program.stack.len < 1) {
         return error.read_empty_stack;
     }
-    try program.alt_stack.append(program.stack.pop());
+    try program.alt_stack.append(program.stack.pop().?);
 }
 
 pub fn op_fromaltstack(program: *Program) anyerror!void {
     if (program.alt_stack.len < 1) {
         return error.read_empty_stack;
     }
-    try program.stack.append(program.alt_stack.pop());
+    try program.stack.append(program.alt_stack.pop().?);
     program.metrics.tallyPushOp(@intCast(program.stack.get(program.stack.len - 1).bytes.len));
 }
 
@@ -1212,8 +1212,8 @@ pub fn op_equalverify(program: *Program) anyerror!void {
     if (program.stack.len < 2) {
         return error.read_empty_stack;
     }
-    const item2 = program.stack.pop();
-    const item1 = program.stack.pop();
+    const item2 = program.stack.pop().?;
+    const item1 = program.stack.pop().?;
 
     const is_equal = std.mem.eql(u8, item1.bytes, item2.bytes);
     // Allocate  only if needed, and ensure it's always freed
@@ -1329,7 +1329,7 @@ pub fn op_not(program: *Program) anyerror!void {
         return error.read_empty_stack;
     }
     const push_cost_factor = 1;
-    const item = program.stack.pop();
+    const item = program.stack.pop().?;
     var script_num = try readScriptInt(item.bytes, program.allocator);
     _ = try script_num.set(@intFromBool(script_num.eqlZero()));
 
@@ -1812,7 +1812,7 @@ pub fn op_ripemd160(program: *Program) anyerror!void {
     if (program.stack.len < 1) {
         return error.read_empty_stack;
     }
-    const item = program.stack.pop();
+    const item = program.stack.pop().?;
     var buff = try program.allocator.alloc(u8, 32);
     const is_two_rounds = false;
     const hash_len: usize = 20;
@@ -1826,7 +1826,7 @@ pub fn op_sha1(program: *Program) anyerror!void {
     if (program.stack.len < 1) {
         return error.read_empty_stack;
     }
-    const item = program.stack.pop();
+    const item = program.stack.pop().?;
     var buff = try program.allocator.alloc(u8, 32);
     const is_two_rounds = false;
     const hash_len: usize = 20;
@@ -1840,7 +1840,7 @@ pub fn op_sha256(program: *Program) anyerror!void {
     if (program.stack.len < 1) {
         return error.read_empty_stack;
     }
-    const item = program.stack.pop();
+    const item = program.stack.pop().?;
     var buff = try program.allocator.alloc(u8, 32);
     const is_two_rounds = false;
     const hash_len = 32;
@@ -1854,7 +1854,7 @@ pub fn op_hash160(program: *Program) anyerror!void {
     if (program.stack.len < 1) {
         return error.read_empty_stack;
     }
-    const item = program.stack.pop();
+    const item = program.stack.pop().?;
     var buff = try program.allocator.alloc(u8, 32);
     const is_two_rounds = true;
     const hash_len: usize = 20;
@@ -1869,7 +1869,7 @@ pub fn op_hash256(program: *Program) anyerror!void {
     if (program.stack.len < 1) {
         return error.read_empty_stack;
     }
-    const item = program.stack.pop();
+    const item = program.stack.pop().?;
     var buff = try program.allocator.alloc(u8, 32);
     const is_two_rounds = true;
     const hash_len: usize = 32;
